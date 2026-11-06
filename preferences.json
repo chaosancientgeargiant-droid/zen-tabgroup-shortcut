@@ -1,0 +1,16 @@
+[
+  {
+    "property": "mod.native-group-shortcut.group",
+    "label": "選択中のタブをグループ化（標準の名前・色パネルを開く）",
+    "type": "string",
+    "defaultValue": "Alt+G",
+    "placeholder": "クリックしてキーを押す"
+  },
+  {
+    "property": "mod.native-group-shortcut.ungroup",
+    "label": "現在のタブをグループから外す",
+    "type": "string",
+    "defaultValue": "Cmd+Shift+R",
+    "placeholder": "クリックしてキーを押す"
+  }
+]
