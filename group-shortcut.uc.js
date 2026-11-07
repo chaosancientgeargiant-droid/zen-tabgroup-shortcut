@@ -60,8 +60,21 @@
 
   // 入力できない原因の調査用ログ（解決したら false に）
   const DEBUG = true;
+  const dlog = (...a) => console.log("[NativeGroupShortcut]", ...a);
+  const T = () => Math.round(performance.now()) % 100000; // 経過ミリ秒（同士を比べる用）
+
+  // popupshown/popuphidden が何回起きるか（開き直しが起きていないか）を記録
+  function hookPanelEvents(menu) {
+    const p = menu.panel;
+    if (!p || p.__ngsHook) return;
+    p.__ngsHook = true;
+    p.addEventListener("popupshowing", () => dlog(T(), "popupshowing"));
+    p.addEventListener("popupshown", () => dlog(T(), "popupshown"));
+    p.addEventListener("popuphidden", () => dlog(T(), "popuphidden"));
+  }
+
   function debugPanel(menu) {
-    const log = (...a) => console.log("[NativeGroupShortcut]", ...a);
+    const log = dlog;
     setTimeout(() => {
       try {
         const p = menu.panel;
@@ -76,27 +89,42 @@
           i.__ngsDbg = true;
           i.addEventListener("keydown", (e) =>
             log("keydown in input:", e.key, "defaultPrevented:", e.defaultPrevented, "composing:", e.isComposing));
+          i.addEventListener("keypress", (e) => log("keypress:", e.key, "prevented:", e.defaultPrevented));
+          i.addEventListener("beforeinput", (e) => log("beforeinput:", e.inputType, "prevented:", e.defaultPrevented));
+          i.addEventListener("compositionstart", () => log("compositionstart"));
           i.addEventListener("input", () => log("input event, value =", i.value));
         }
       } catch (e) { log("diag failed:", String(e)); }
     }, 500);
   }
 
+  const isOpen = (m) => !!(m && m.panel && (m.panel.state === "showing" || m.panel.state === "open"));
+
   function groupSelected() {
     const tabs = targetTabs().filter((t) => !t.pinned);
     if (!tabs.length) return;
+    const menu0 = gBrowser.tabGroupMenu;
+    if (DEBUG && menu0) hookPanelEvents(menu0);
     // ZenのaddTabGroupは insertBefore が必須
     const group = gBrowser.addTabGroup(tabs, {
       insertBefore: tabs[0],
       isUserTriggered: true,
       telemetryUserCreateSource: "shortcut",
     });
+    // isUserTriggered により、Firefox本体の処理（TabGroupCreateByUser）が
+    // 自動でパネルを開いている場合がある。その場合は二重に開かない。
+    if (DEBUG) dlog(T(), "addTabGroup直後 panel.state =", menu0 && menu0.panel && menu0.panel.state);
+    if (isOpen(menu0)) {
+      if (DEBUG) { dlog(T(), "本体が開いたので openCreateModal は呼びません"); debugPanel(menu0); }
+      return;
+    }
     whenLaidOut(group, () => {
       try {
         const m = gBrowser.tabGroupMenu;
         if (!m) return;
         if (!m.isConnected) document.getElementById("mainPopupSet").appendChild(m);
-        m.openCreateModal(group);
+        if (DEBUG) { hookPanelEvents(m); dlog(T(), "openCreateModal を呼ぶ直前 state =", m.panel && m.panel.state); }
+        if (!isOpen(m)) m.openCreateModal(group);
         focusNameField(m);
         if (DEBUG) debugPanel(m);
       } catch (e) {
@@ -174,7 +202,7 @@
     window.__ngsActive = true;
     if (DEBUG) {
       const log = (...a) => console.log("[NativeGroupShortcut]", ...a);
-      log("loaded v0.2.1");
+      log("loaded v0.2.2");
       // パネル内のキー入力が、途中で止められていないかを見る（captureとbubbleで defaultPrevented を比べる）
       const inMenu = (e) => e.composedPath().some((n) => n.localName === "tabgroup-menu" || n.id === "tab-group-editor");
       window.addEventListener("keydown", (e) => {
