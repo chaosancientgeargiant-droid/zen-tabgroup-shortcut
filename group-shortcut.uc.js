@@ -69,6 +69,7 @@
           activeInPanel: !!(p && p.contains(document.activeElement)),
           activeTag: document.activeElement && document.activeElement.localName,
           hasFocus: document.hasFocus(),
+          focus: describeFocus(),
         }));
         if (i && !i.__ngsDbg) {
           i.__ngsDbg = true;
@@ -85,9 +86,24 @@
 
   const isOpen = (m) => !!(m && m.panel && (m.panel.state === "showing" || m.panel.state === "open"));
 
+  // 今どこにフォーカスがあるかの記録用
+  function describeFocus() {
+    try {
+      const fm = Services.focus;
+      const el = fm.focusedElement;
+      const w = fm.focusedWindow;
+      let where = "?";
+      try { where = w === window ? "本体ウィンドウ" : "コンテンツ(" + (w && w.location && w.location.protocol) + ")"; } catch (_) { where = "コンテンツ"; }
+      return (el ? el.localName + (el.id ? "#" + el.id : "") : "(要素なし)") + " / " + where;
+    } catch (e) { return "取得失敗: " + e; }
+  }
+
   function groupSelected() {
     const tabs = targetTabs().filter((t) => !t.pinned);
     if (!tabs.length) return;
+    // パネルを開く前に、Webページ（別プロセス）に残っているフォーカスを外す（仮説：文字入力がページ側に流れるのを防ぐ）
+    if (DEBUG) dlog(T(), "実行前のフォーカス:", describeFocus());
+    try { Services.focus.clearFocus(window); } catch (e) { dlog("clearFocus失敗:", String(e)); }
     if (DEBUG && gBrowser.tabGroupMenu) hookPanelEvents(gBrowser.tabGroupMenu);
 
     // 1) 右クリックメニューの「新しいグループにタブを追加」と同じ関数を呼ぶ。
@@ -142,32 +158,8 @@
     for (const t of tabs) gBrowser.ungroupTab(t);
   }
 
-  // ショートカットのキーを押している最中にパネルを開くと、文字が入力できなくなる（ログの傾向からの仮説）。
-  // そのため、押していたキー（本体キー＋修飾キー）がすべて離されてから実行する。
-  // 離されたことが検知できなくても、1.5秒後には実行する。
-  function runAfterKeysReleased(code, fn) {
-    const held = new Set([code]);
-    const t0 = performance.now();
-    let done = false;
-    let timer = null;
-    const go = () => {
-      if (done) return;
-      done = true;
-      window.removeEventListener("keyup", onUp, true);
-      clearTimeout(timer);
-      if (DEBUG) dlog(T(), "キー解放後に実行（待ち時間", Math.round(performance.now() - t0), "ms）");
-      fn();
-    };
-    const onUp = (e) => {
-      held.delete(e.code);
-      if (!held.size && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) go();
-    };
-    window.addEventListener("keyup", onUp, true);
-    timer = setTimeout(go, 1500);
-  }
-
   const ACTIONS = [
-    { id: "group", label: "グループ化", run: groupSelected, afterRelease: true },
+    { id: "group", label: "グループ化", run: groupSelected },
     { id: "ungroup", label: "グループから外す", run: ungroupSelected },
   ];
 
@@ -225,7 +217,7 @@
     window.__ngsActive = true;
     if (DEBUG) {
       const log = (...a) => console.log("[NativeGroupShortcut]", ...a);
-      log("loaded v0.2.5");
+      log("loaded v0.2.6");
       // パネル内のキー入力が、途中で止められていないかを見る（captureとbubbleで defaultPrevented を比べる）
       const inMenu = (e) => e.composedPath().some((n) => n.localName === "tabgroup-menu" || n.id === "tab-group-editor");
       window.addEventListener("keydown", (e) => {
@@ -249,8 +241,7 @@
             const run = () => {
               try { a.run(); } catch (err) { console.error("[NativeGroupShortcut]", a.id, err); }
             };
-            if (a.afterRelease) runAfterKeysReleased(e.code, run);
-            else run();
+            run();
             return;
           }
         }
