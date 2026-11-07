@@ -3,7 +3,7 @@
     "name": "Native Group Shortcut",
     "description": "選択中のタブをグループ化して標準の名前・色パネルを開くショートカットと、グループから外すショートカット。キーは設定画面で変更できます。",
     "author": "local",
-    "version": "0.2.0",
+    "version": "0.2.1",
     "scripts": {
         "group-shortcut.uc.js": {
             "name": "Core script",
@@ -16,8 +16,15 @@
         }
     },
     "preferences": "preferences.json",
-    "tags": ["tabs", "shortcut", "hotkey", "tab groups"],
-    "fork": ["zen"],
+    "tags": [
+        "tabs",
+        "shortcut",
+        "hotkey",
+        "tab groups"
+    ],
+    "fork": [
+        "zen"
+    ],
     "createdAt": "2026-11-06",
-    "updatedAt": "2026-11-07"
+    "updatedAt": "2026-11-07T18:00:00Z"
 }
