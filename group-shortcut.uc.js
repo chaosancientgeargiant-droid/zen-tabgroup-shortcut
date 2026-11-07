@@ -103,27 +103,42 @@
   function groupSelected() {
     const tabs = targetTabs().filter((t) => !t.pinned);
     if (!tabs.length) return;
-    const menu0 = gBrowser.tabGroupMenu;
-    if (DEBUG && menu0) hookPanelEvents(menu0);
-    // ZenのaddTabGroupは insertBefore が必須
-    const group = gBrowser.addTabGroup(tabs, {
-      insertBefore: tabs[0],
-      isUserTriggered: true,
-      telemetryUserCreateSource: "shortcut",
-    });
-    // isUserTriggered により、Firefox本体の処理（TabGroupCreateByUser）が
-    // 自動でパネルを開いている場合がある。その場合は二重に開かない。
-    if (DEBUG) dlog(T(), "addTabGroup直後 panel.state =", menu0 && menu0.panel && menu0.panel.state);
-    if (isOpen(menu0)) {
-      if (DEBUG) { dlog(T(), "本体が開いたので openCreateModal は呼びません"); debugPanel(menu0); }
-      return;
+    if (DEBUG && gBrowser.tabGroupMenu) hookPanelEvents(gBrowser.tabGroupMenu);
+
+    // 1) 右クリックメニューの「新しいグループにタブを追加」と同じ関数を呼ぶ。
+    //    （Firefox本体では addTabGroup のあと selectedTab の設定などもここで行う）
+    //    この関数は contextTab / contextTabs を参照するので、先に入れておく。
+    const ctxMenu = typeof TabContextMenu !== "undefined" ? TabContextMenu : null;
+    if (ctxMenu && typeof ctxMenu.moveTabsToNewGroup === "function") {
+      try {
+        ctxMenu.contextTab = tabs.includes(gBrowser.selectedTab) ? gBrowser.selectedTab : tabs[0];
+        ctxMenu.contextTabs = tabs;
+        ctxMenu.moveTabsToNewGroup();
+        if (DEBUG) dlog(T(), "TabContextMenu.moveTabsToNewGroup を呼びました");
+      } catch (e) {
+        dlog(T(), "moveTabsToNewGroup でエラー:", String(e));
+      }
     }
+
+    // 2) 上で作れなかった場合だけ、自分で作る（ZenのaddTabGroupは insertBefore が必須）
+    let group = tabs[0].group;
+    if (!group) {
+      group = gBrowser.addTabGroup(tabs, {
+        insertBefore: tabs[0],
+        isUserTriggered: true,
+        telemetryUserCreateSource: "shortcut",
+      });
+      if (DEBUG) dlog(T(), "自前で addTabGroup しました");
+    }
+    if (!group) return;
+
+    // 3) パネルがまだ開いていなければ開く（本体や Zen が開く場合は二重に開かない）
     whenLaidOut(group, () => {
       try {
         const m = gBrowser.tabGroupMenu;
         if (!m) return;
         if (!m.isConnected) document.getElementById("mainPopupSet").appendChild(m);
-        if (DEBUG) { hookPanelEvents(m); dlog(T(), "openCreateModal を呼ぶ直前 state =", m.panel && m.panel.state); }
+        if (DEBUG) { hookPanelEvents(m); dlog(T(), "パネル確認 state =", m.panel && m.panel.state); }
         if (!isOpen(m)) m.openCreateModal(group);
         focusNameField(m);
         if (DEBUG) debugPanel(m);
@@ -202,7 +217,7 @@
     window.__ngsActive = true;
     if (DEBUG) {
       const log = (...a) => console.log("[NativeGroupShortcut]", ...a);
-      log("loaded v0.2.2");
+      log("loaded v0.2.3");
       // パネル内のキー入力が、途中で止められていないかを見る（captureとbubbleで defaultPrevented を比べる）
       const inMenu = (e) => e.composedPath().some((n) => n.localName === "tabgroup-menu" || n.id === "tab-group-editor");
       window.addEventListener("keydown", (e) => {
