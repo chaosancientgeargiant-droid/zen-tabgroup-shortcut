@@ -43,40 +43,6 @@
     requestAnimationFrame(step);
   }
 
-  // 2回目以降にパネルを開くと文字が入らなくなる問題への対策（原因は仮説）:
-  // パネルを閉じても入力欄が「フォーカス済み」のまま残り、次に開いたときの focus() が
-  // 何も起こさず、文字入力の仕組みにフォーカスが渡り直されない、と考えている。
-  // → 閉じたら blur しておき、開いて表示が終わったあとに blur → focus をやり直す。
-  const nameFieldOf = (menu) => menu.panel && menu.panel.querySelector("input, moz-input-text");
-
-  function hookPanelReset(menu) {
-    const p = menu.panel;
-    if (!p || p.__ngsReset) return;
-    p.__ngsReset = true;
-    p.addEventListener("popuphidden", () => {
-      const i = nameFieldOf(menu);
-      if (i) i.blur();
-    });
-  }
-
-  function refocusOnShown(menu) {
-    const p = menu.panel;
-    if (!p || p.__ngsRefocusPending) return; // 同じ表示に対して二重に登録しない
-    p.__ngsRefocusPending = true;
-    const redo = () =>
-      requestAnimationFrame(() => {
-        p.__ngsRefocusPending = false;
-        const i = nameFieldOf(menu);
-        if (!i) return;
-        i.blur();
-        i.focus();
-        if (typeof i.select === "function") i.select();
-        if (DEBUG) dlog(T(), "入力欄のフォーカスをやり直しました");
-      });
-    if (p.state === "open") redo();
-    else p.addEventListener("popupshown", redo, { once: true });
-  }
-
   // 入力できない原因の調査用ログ（解決したら false に）
   const DEBUG = true;
   const dlog = (...a) => console.log("[NativeGroupShortcut]", ...a);
@@ -122,11 +88,7 @@
   function groupSelected() {
     const tabs = targetTabs().filter((t) => !t.pinned);
     if (!tabs.length) return;
-    if (gBrowser.tabGroupMenu) {
-      hookPanelReset(gBrowser.tabGroupMenu);
-      refocusOnShown(gBrowser.tabGroupMenu);
-      if (DEBUG) hookPanelEvents(gBrowser.tabGroupMenu);
-    }
+    if (DEBUG && gBrowser.tabGroupMenu) hookPanelEvents(gBrowser.tabGroupMenu);
 
     // 1) 右クリックメニューの「新しいグループにタブを追加」と同じ関数を呼ぶ。
     //    （Firefox本体では addTabGroup のあと selectedTab の設定などもここで行う）
@@ -161,12 +123,8 @@
         const m = gBrowser.tabGroupMenu;
         if (!m) return;
         if (!m.isConnected) document.getElementById("mainPopupSet").appendChild(m);
-        hookPanelReset(m);
         if (DEBUG) { hookPanelEvents(m); dlog(T(), "パネル確認 state =", m.panel && m.panel.state); }
-        if (!isOpen(m)) {
-          refocusOnShown(m);
-          m.openCreateModal(group);
-        }
+        if (!isOpen(m)) m.openCreateModal(group);
         if (DEBUG) debugPanel(m);
       } catch (e) {
         console.error("[NativeGroupShortcut] パネルを開けませんでした:", e);
@@ -184,8 +142,32 @@
     for (const t of tabs) gBrowser.ungroupTab(t);
   }
 
+  // ショートカットのキーを押している最中にパネルを開くと、文字が入力できなくなる（ログの傾向からの仮説）。
+  // そのため、押していたキー（本体キー＋修飾キー）がすべて離されてから実行する。
+  // 離されたことが検知できなくても、1.5秒後には実行する。
+  function runAfterKeysReleased(code, fn) {
+    const held = new Set([code]);
+    const t0 = performance.now();
+    let done = false;
+    let timer = null;
+    const go = () => {
+      if (done) return;
+      done = true;
+      window.removeEventListener("keyup", onUp, true);
+      clearTimeout(timer);
+      if (DEBUG) dlog(T(), "キー解放後に実行（待ち時間", Math.round(performance.now() - t0), "ms）");
+      fn();
+    };
+    const onUp = (e) => {
+      held.delete(e.code);
+      if (!held.size && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) go();
+    };
+    window.addEventListener("keyup", onUp, true);
+    timer = setTimeout(go, 1500);
+  }
+
   const ACTIONS = [
-    { id: "group", label: "グループ化", run: groupSelected },
+    { id: "group", label: "グループ化", run: groupSelected, afterRelease: true },
     { id: "ungroup", label: "グループから外す", run: ungroupSelected },
   ];
 
@@ -243,7 +225,7 @@
     window.__ngsActive = true;
     if (DEBUG) {
       const log = (...a) => console.log("[NativeGroupShortcut]", ...a);
-      log("loaded v0.2.4");
+      log("loaded v0.2.5");
       // パネル内のキー入力が、途中で止められていないかを見る（captureとbubbleで defaultPrevented を比べる）
       const inMenu = (e) => e.composedPath().some((n) => n.localName === "tabgroup-menu" || n.id === "tab-group-editor");
       window.addEventListener("keydown", (e) => {
@@ -263,7 +245,12 @@
           if (complete(s) && same(pressed, s)) {
             e.preventDefault();
             e.stopPropagation();
-            try { a.run(); } catch (err) { console.error("[NativeGroupShortcut]", a.id, err); }
+            if (e.repeat) return; // 長押しでの連続発火を防ぐ
+            const run = () => {
+              try { a.run(); } catch (err) { console.error("[NativeGroupShortcut]", a.id, err); }
+            };
+            if (a.afterRelease) runAfterKeysReleased(e.code, run);
+            else run();
             return;
           }
         }
