@@ -5,10 +5,10 @@
 // @include      about:preferences*
 // @include      about:settings*
 // ==/UserScript==
-
+ 
 (function () {
   "use strict";
-
+ 
   const PREF = "mod.native-group-shortcut.";
   const IS_MAC = Services.appinfo.OS === "Darwin";
   const MOD_WORDS = {
@@ -19,25 +19,69 @@
   };
   const PURE_MODS = ["Control", "Shift", "Alt", "Meta", "OS", "AltGraph"];
   const UNUSABLE = ["Dead", "Process", "Unidentified"];
-
+ 
   // ---------- 動作 ----------
-
+ 
   function targetTabs() {
     return gBrowser.selectedTabs && gBrowser.selectedTabs.length
       ? gBrowser.selectedTabs
       : [gBrowser.selectedTab];
   }
-
-  // 要素が画面に配置されるまで待つ（固定の待ち時間は使わない。最大 約1秒）
-  function whenLaidOut(el, cb, tries = 60) {
-    const check = () => {
-      if (el.isConnected && el.getBoundingClientRect().height > 0) return cb();
-      if (--tries <= 0) return cb();
-      requestAnimationFrame(check);
+ 
+  // パネルの貼り付け先（グループのラベル部分）が画面に配置されるまで待つ。
+  // <tab-group> 自体は表示上の大きさが0なので、判定には使えない（実測で確認済み）。
+  // 配置されなくても、最大12フレーム（約0.2秒）で待つのをやめる。
+  const anchorOf = (g) =>
+    g.querySelector(".tab-group-label-container") || g.labelElement || (g.tabs && g.tabs[0]) || g;
+ 
+  function whenLaidOut(group, cb, tries = 12) {
+    const step = () => {
+      const a = anchorOf(group);
+      if ((a.isConnected && a.getBoundingClientRect().height > 0) || --tries <= 0) return cb();
+      requestAnimationFrame(step);
     };
-    requestAnimationFrame(check);
+    requestAnimationFrame(step);
   }
-
+ 
+  // パネルが開いたら、名前の入力欄にフォーカスを渡す（最大10フレーム待つ）
+  function focusNameField(menu, tries = 10) {
+    const step = () => {
+      const p = menu.panel;
+      const input = p && p.querySelector("input, moz-input-text");
+      if (p && input && (p.state === "open" || p.state === "showing")) {
+        input.focus();
+        if (typeof input.select === "function") input.select();
+        return;
+      }
+      if (--tries > 0) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+ 
+  // 入力できない原因の調査用ログ（解決したら false に）
+  const DEBUG = true;
+  function debugPanel(menu) {
+    const log = (...a) => console.log("[NativeGroupShortcut]", ...a);
+    setTimeout(() => {
+      try {
+        const p = menu.panel;
+        const i = p && p.querySelector("input, moz-input-text");
+        log("diag", JSON.stringify({
+          state: p && p.state,
+          activeInPanel: !!(p && p.contains(document.activeElement)),
+          activeTag: document.activeElement && document.activeElement.localName,
+          hasFocus: document.hasFocus(),
+        }));
+        if (i && !i.__ngsDbg) {
+          i.__ngsDbg = true;
+          i.addEventListener("keydown", (e) =>
+            log("keydown in input:", e.key, "defaultPrevented:", e.defaultPrevented, "composing:", e.isComposing));
+          i.addEventListener("input", () => log("input event, value =", i.value));
+        }
+      } catch (e) { log("diag failed:", String(e)); }
+    }, 500);
+  }
+ 
   function groupSelected() {
     const tabs = targetTabs().filter((t) => !t.pinned);
     if (!tabs.length) return;
@@ -53,12 +97,14 @@
         if (!m) return;
         if (!m.isConnected) document.getElementById("mainPopupSet").appendChild(m);
         m.openCreateModal(group);
+        focusNameField(m);
+        if (DEBUG) debugPanel(m);
       } catch (e) {
         console.error("[NativeGroupShortcut] パネルを開けませんでした:", e);
       }
     });
   }
-
+ 
   function ungroupSelected() {
     const tabs = targetTabs().filter((t) => t.group);
     if (!tabs.length) return;
@@ -68,14 +114,14 @@
     }
     for (const t of tabs) gBrowser.ungroupTab(t);
   }
-
+ 
   const ACTIONS = [
     { id: "group", label: "グループ化", run: groupSelected },
     { id: "ungroup", label: "グループから外す", run: ungroupSelected },
   ];
-
+ 
   // ---------- ショートカットの解釈 ----------
-
+ 
   function parse(str) {
     const s = { ctrl: false, alt: false, shift: false, meta: false, key: "" };
     for (const raw of (str || "").split("+")) {
@@ -86,7 +132,7 @@
     }
     return s;
   }
-
+ 
   function format(s) {
     const p = [];
     if (s.ctrl) p.push("Ctrl");
@@ -96,7 +142,7 @@
     if (s.key) p.push(s.key);
     return p.join("+");
   }
-
+ 
   // Macの Option+G は e.key が「©」になるため、英数字は e.code から取る
   function keyOf(e) {
     if (PURE_MODS.includes(e.key)) return null;
@@ -105,14 +151,14 @@
     if (UNUSABLE.includes(e.key)) return null;
     return e.key.length === 1 ? e.key.toUpperCase() : e.key;
   }
-
+ 
   const fromEvent = (e) => ({
     ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, meta: e.metaKey, key: keyOf(e),
   });
   const complete = (s) => !!s.key && (s.ctrl || s.alt || s.meta);
   const same = (a, b) =>
     a.ctrl === b.ctrl && a.alt === b.alt && a.shift === b.shift && a.meta === b.meta && a.key === b.key;
-
+ 
   // Sineは設定画面を開いたときにしか既定値を保存しないため、未保存なら既定値を使う
   // （ユーザーが明示的に解除した場合は空文字が保存されるので、そのまま無効になる）
   const DEFAULTS = { group: "Alt+G", ungroup: "Cmd+Shift+R" };
@@ -120,9 +166,9 @@
     try { return parse(Services.prefs.getStringPref(PREF + id, DEFAULTS[id])); }
     catch (_) { return parse(DEFAULTS[id]); }
   };
-
+ 
   // ---------- ブラウザウィンドウ: キーを受け取る ----------
-
+ 
   function initBrowser() {
     if (window.__ngsActive) return;
     window.__ngsActive = true;
@@ -144,9 +190,9 @@
       true
     );
   }
-
+ 
   // ---------- 設定画面: キー入力欄 ----------
-
+ 
   // 既存のブラウザのキーと重なっていれば、その名前（不明なら ""）を返す。重なりなしは null
   function browserConflict(s) {
     try {
@@ -167,17 +213,17 @@
     } catch (_) {}
     return null;
   }
-
+ 
   function wire(action) {
     const row = document.getElementById((PREF + action.id).replaceAll(".", "-"));
     if (!row || row.__ngsWired) return;
     const input = row.querySelector("input");
     if (!input) return;
     row.__ngsWired = true;
-
+ 
     input.readOnly = true;
     input.style.cursor = "pointer";
-
+ 
     const note = document.createXULElement("description");
     note.style.cssText = "margin:2px 0 6px;font-size:12px;";
     row.after(note);
@@ -186,7 +232,7 @@
       note.style.color = warn ? "#e67e22" : "var(--text-color-deemphasized, #9e9ea0)";
       note.hidden = !text;
     };
-
+ 
     let committed = input.value;
     const save = (v) => {
       committed = v;
@@ -203,7 +249,7 @@
       if (c !== null) return say(c ? `⚠ 「${c}」と重なっています（このModが優先されます）` : "⚠ 既存のキーと重なっています（このModが優先されます）", true);
       say("✓ 保存しました");
     };
-
+ 
     input.addEventListener("focus", () => say("キーを押してください（Delete で解除、Esc でキャンセル）"));
     input.addEventListener("blur", () => {
       input.value = committed;
@@ -223,7 +269,7 @@
     });
     say(committed ? "" : "未設定");
   }
-
+ 
   function initSettings() {
     if (window.__ngsSettings) return;
     window.__ngsSettings = true;
@@ -233,7 +279,7 @@
     obs.observe(document.documentElement, { childList: true, subtree: true });
     window.addEventListener("unload", () => obs.disconnect(), { once: true });
   }
-
+ 
   const href = (document.location && document.location.href) || "";
   if (href.startsWith("about:preferences") || href.startsWith("about:settings")) initSettings();
   else initBrowser();
