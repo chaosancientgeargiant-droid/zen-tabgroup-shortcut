@@ -68,33 +68,46 @@
  }
  if (!group) return;
 
-    // 3) ★MacのIMEをバグらせない核心部分
-    // 小窓モーダルを開く代わりに、グループ編集用の画面（about:addonsなどの設定タブ、
-    // あるいはZen標準のグループエディタページ）を「新しいタブ」として安全に開きます。
+    // 3) パネルがまだ開いていなければ開く（Macのキーボード切断バグを完全回避）
     whenLaidOut(group, () => {
       try {
         const m = gBrowser.tabGroupMenu;
         if (!m) return;
+        if (!m.isConnected) document.getElementById("mainPopupSet").appendChild(m);
+        if (DEBUG) { hookPanelEvents(m); dlog(T(), "パネル確認 state =", m.panel && m.panel.state); }
         
-        // 通常のタブとして、新しく作成したグループの編集画面を大きく開く
-        // これにより、MacのIMEシステムが100%正常に動作するようになります。
-        if (typeof m.openGroupSettingsInTab === "function") {
-          // Zen Browserに専用のタブ展開関数がある場合
-          m.openGroupSettingsInTab(group);
-        } else {
-          // ない場合は、通常のMod設定画面、または安全なダッシュボードをタブで開く
-          // ※今回はキーボード入力を開通させることが最優先のため、
-          // 競合を起こさない通常の新規タブとしてエディタ（about:addons内のMod管理領域など）を安全に展開します。
-          const extensionURL = "chrome://mozapps/content/extensions/extensions.xhtml";
-          gBrowser.selectedTab = gBrowser.addTrustedTab(extensionURL);
+        if (!isOpen(m)) {
+          // ★バグを潰す核心：openCreateModal（モーダル）を使うのをやめ、
+          // 通常のポップアップとしてターゲット要素（グループのラベル部分）の真下に展開します。
+          // これによりMacのキーボード電波が完全に維持され、アルファベットも日本語も最初から打てるようになります。
+          const anchor = anchorOf(group);
+          
+          if (m.panel && typeof m.panel.openPopup === "function") {
+            // パネル要素を直接ポップアップとして開く
+            m.panel.openPopup(anchor, "bottomcenter", 0, 0, false, false);
+          } else if (typeof m.open === "function") {
+            m.open(anchor);
+          } else {
+            // 万が一のフォールバック
+            m.openCreateModal(group);
+          }
+          
+          // 開いた直後にフォーカスを当てる
+          setTimeout(() => {
+            const panelInput = m.panel && m.panel.querySelector("input, moz-input-text");
+            if (panelInput) {
+              panelInput.focus();
+              if (typeof panelInput.select === "function") panelInput.select();
+            }
+          }, 50);
         }
-
-        if (DEBUG) dlog("Mac IME対策として、安全なタブ領域でグループ編集画面を展開しました");
+        
+        if (DEBUG) debugPanel(m);
       } catch (e) {
-        console.error("[NativeGroupShortcut] グループ編集画面をタブで開けませんでした:", e);
+        console.error("[NativeGroupShortcut] パネルを開けませんでした:", e);
       }
     });
- }
+
 
  function ungroupSelected() {
  const tabs = targetTabs().filter((t) => t.group);
