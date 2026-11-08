@@ -230,10 +230,11 @@
 
  // ---------- ブラウザウィンドウ: キーを受け取る ----------
 
- function initBrowser() {
- if (window.__ngsActive) return;
- window.__ngsActive = true;
- if (DEBUG) {
- const log = (...a) => console.log("[NativeGroupShortcut]", ...a);
- log("loaded v0.2.6");
- // パネル内のキー入力が、途中で止められていないかを見る(captureとbubbleで defaultPr
+  function initBrowser() {
+    if (window.__ngsActive) return;
+    window.__ngsActive = true;
+    if (DEBUG) dlog("loaded v0.3.0 - Mac KeyUp Fix");
+
+    // keydown ではなく keyup（指を離した瞬間）にイベントを受け取る
+    window.addEventListener("keyup", handleKeyDown, true);
+  }
