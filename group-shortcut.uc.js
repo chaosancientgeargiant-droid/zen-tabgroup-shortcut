@@ -28,6 +28,7 @@
  : [gBrowser.selectedTab];
  }
 
+ // パネルの貼り付け先(グループのラベル部分)が画面に配置されるまで待つ。
  const anchorOf = (g) =>
  g.querySelector(".tab-group-label-container") || g.labelElement || (g.tabs && g.tabs) || g;
 
@@ -42,22 +43,66 @@
 
  const DEBUG = true;
  const dlog = (...a) => console.log("[NativeGroupShortcut]", ...a);
+ const T = () => Math.round(performance.now()) % 100000;
+
+ function hookPanelEvents(menu) {
+ const p = menu.panel;
+ if (!p || p.__ngsHook) return;
+ p.__ngsHook = true;
+ p.addEventListener("popupshowing", () => dlog(T(), "popupshowing"));
+ p.addEventListener("popupshown", () => dlog(T(), "popupshown"));
+ p.addEventListener("popuphidden", () => dlog(T(), "popuphidden"));
+ }
+
+ function debugPanel(menu) {
+ const log = dlog;
+ setTimeout(() => {
+ try {
+ const p = menu.panel;
+ const i = p && p.querySelector("input, moz-input-text");
+ log("diag", JSON.stringify({
+ state: p && p.state,
+ activeInPanel: !!(p && p.contains(document.activeElement)),
+ activeTag: document.activeElement && document.activeElement.localName,
+ hasFocus: document.hasFocus(),
+ focus: describeFocus(),
+ }));
+ } catch (e) { log("diag failed:", String(e)); }
+ }, 500);
+ }
+
+ const isOpen = (m) => !!(m && m.panel && (m.panel.state === "showing" || m.panel.state === "open"));
+
+ function describeFocus() {
+ try {
+ const fm = Services.focus;
+ const el = fm.focusedElement;
+ const w = fm.focusedWindow;
+ let where = "?";
+ try { where = w === window ? "本体ウィンドウ" : "コンテンツ(" + (w && w.location && w.location.protocol) + ")"; } catch (_) { where = "コンテンツ"; }
+ return (el ? el.localName + (el.id ? "#" + el.id : "") : "(要素なし)") + " / " + where;
+ } catch (e) { return "取得失敗: " + e; }
+ }
 
  function groupSelected() {
  const tabs = targetTabs().filter((t) => !t.pinned);
  if (!tabs.length) return;
+ if (DEBUG) dlog(T(), "実行前のフォーカス:", describeFocus());
+ try { Services.focus.clearFocus(window); } catch (e) { dlog("clearFocus失敗:", String(e)); }
+ if (DEBUG && gBrowser.tabGroupMenu) hookPanelEvents(gBrowser.tabGroupMenu);
 
- // 1) 右クリックメニューの「新しいグループにタブを追加」と同じ関数を呼ぶ
  const ctxMenu = typeof TabContextMenu !== "undefined" ? TabContextMenu : null;
  if (ctxMenu && typeof ctxMenu.moveTabsToNewGroup === "function") {
  try {
-   ctxMenu.contextTab = tabs.includes(gBrowser.selectedTab) ? gBrowser.selectedTab : tabs;
-   ctxMenu.contextTabs = tabs;
-   ctxMenu.moveTabsToNewGroup();
- } catch (e) { if (DEBUG) dlog("moveTabsToNewGroup エラー:", String(e)); }
+ ctxMenu.contextTab = tabs.includes(gBrowser.selectedTab) ? gBrowser.selectedTab : tabs;
+ ctxMenu.contextTabs = tabs;
+ ctxMenu.moveTabsToNewGroup();
+ if (DEBUG) dlog(T(), "TabContextMenu.moveTabsToNewGroup を呼びました");
+ } catch (e) {
+ dlog(T(), "moveTabsToNewGroup でエラー:", String(e));
+ }
  }
 
- // 2) 上で作れなかった場合だけ、自分で作る
  let group = tabs.group;
  if (!group) {
  group = gBrowser.addTabGroup(tabs, {
@@ -65,10 +110,11 @@
  isUserTriggered: true,
  telemetryUserCreateSource: "shortcut",
  });
+ if (DEBUG) dlog(T(), "自前で addTabGroup しました");
  }
  if (!group) return;
 
-    // 3) パネルがまだ開いていなければ開く（Macのキーボード切断バグを完全回避）
+    // 3) パネルを開く（Macのモーダルによるキーボード切断バグを完全回避）
     whenLaidOut(group, () => {
       try {
         const m = gBrowser.tabGroupMenu;
@@ -77,22 +123,15 @@
         if (DEBUG) { hookPanelEvents(m); dlog(T(), "パネル確認 state =", m.panel && m.panel.state); }
         
         if (!isOpen(m)) {
-          // ★バグを潰す核心：openCreateModal（モーダル）を使うのをやめ、
-          // 通常のポップアップとしてターゲット要素（グループのラベル部分）の真下に展開します。
-          // これによりMacのキーボード電波が完全に維持され、アルファベットも日本語も最初から打てるようになります。
+          // openCreateModal(モーダル)をやめ、Macのキーボード電波を維持する通常のポップアップで開く
           const anchor = anchorOf(group);
-          
           if (m.panel && typeof m.panel.openPopup === "function") {
-            // パネル要素を直接ポップアップとして開く
             m.panel.openPopup(anchor, "bottomcenter", 0, 0, false, false);
-          } else if (typeof m.open === "function") {
-            m.open(anchor);
           } else {
-            // 万が一のフォールバック
             m.openCreateModal(group);
           }
           
-          // 開いた直後にフォーカスを当てる
+          // 開いた直後にフォーカスを綺麗に当てる
           setTimeout(() => {
             const panelInput = m.panel && m.panel.querySelector("input, moz-input-text");
             if (panelInput) {
@@ -107,7 +146,7 @@
         console.error("[NativeGroupShortcut] パネルを開けませんでした:", e);
       }
     });
-
+ }
 
  function ungroupSelected() {
  const tabs = targetTabs().filter((t) => t.group);
@@ -137,6 +176,16 @@
  return s;
  }
 
+ function format(s) {
+ const p = [];
+ if (s.ctrl) p.push("Ctrl");
+ if (s.alt) p.push("Alt");
+ if (s.shift) p.push("Shift");
+ if (s.meta) p.push(IS_MAC ? "Cmd" : "Super");
+ if (s.key) p.push(s.key);
+ return p.join("+");
+ }
+
  function keyOf(e) {
  if (PURE_MODS.includes(e.key)) return null;
  if (/^Key[A-Z]$/.test(e.code)) return e.code.slice(3);
@@ -151,10 +200,13 @@
  const same = (a, b) =>
  a.ctrl === b.ctrl && a.alt === b.alt && a.shift === b.shift && a.meta === b.meta && a.key === b.key;
 
+ const DEFAULTS = { group: "Alt+G", ungroup: "Cmd+Shift+R" };
  const stored = (id) => {
- try { return parse(Services.prefs.getStringPref(PREF + id, "Alt+G")); }
- catch (_) { return parse("Alt+G"); }
+ try { return parse(Services.prefs.getStringPref(PREF + id, DEFAULTS[id])); }
+ catch (_) { return parse(DEFAULTS[id]); }
  };
+
+ // ---------- ブラウザウィンドウ: キーを受け取る ----------
 
   function handleKeyDown(e) {
     const pressed = fromEvent(e);
@@ -163,9 +215,10 @@
       e.preventDefault();
       e.stopPropagation();
       
+      // 安定したキーダウンイベントから、10ms後に非同期で安全にポップアップを呼び出す
       setTimeout(() => {
         groupSelected();
-      }, 20);
+      }, 10);
       return;
     }
 
@@ -179,6 +232,9 @@
   function initBrowser() {
     if (window.__ngsActive) return;
     window.__ngsActive = true;
+    if (DEBUG) dlog("loaded v0.5.0 - Final PopUp Mode");
+
+    // ショートカット入力を確実に検知する安定したキーダウンに戻す
     window.addEventListener("keydown", handleKeyDown, true);
   }
 
