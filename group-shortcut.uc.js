@@ -28,9 +28,8 @@
  : [gBrowser.selectedTab];
  }
 
- // パネルの貼り付け先(グループのラベル部分)が画面に配置されるまで待つ。
  const anchorOf = (g) =>
- g.querySelector(".tab-group-label-container") || g.labelElement || (g.tabs && g.tabs[0]) || g;
+ g.querySelector(".tab-group-label-container") || g.labelElement || (g.tabs && g.tabs) || g;
 
  function whenLaidOut(group, cb, tries = 12) {
  const step = () => {
@@ -67,15 +66,6 @@
  hasFocus: document.hasFocus(),
  focus: describeFocus(),
  }));
- if (i && !i.__ngsDbg) {
- i.__ngsDbg = true;
- i.addEventListener("keydown", (e) =>
- log("keydown in input:", e.key, "defaultPrevented:", e.defaultPrevented, "composing:", e.isComposing));
- i.addEventListener("keypress", (e) => log("keypress:", e.key, "prevented:", e.defaultPrevented));
- i.addEventListener("beforeinput", (e) => log("beforeinput:", e.inputType, "prevented:", e.defaultPrevented));
- i.addEventListener("compositionstart", () => log("compositionstart"));
- i.addEventListener("input", () => log("input event, value =", i.value));
- }
  } catch (e) { log("diag failed:", String(e)); }
  }, 500);
  }
@@ -96,53 +86,55 @@
  function groupSelected() {
  const tabs = targetTabs().filter((t) => !t.pinned);
  if (!tabs.length) return;
- if (DEBUG) dlog(T(), "実行前のフォーカス:", describeFocus());
- try { Services.focus.clearFocus(window); } catch (e) { dlog("clearFocus失敗:", String(e)); }
- if (DEBUG && gBrowser.tabGroupMenu) hookPanelEvents(gBrowser.tabGroupMenu);
 
  const ctxMenu = typeof TabContextMenu !== "undefined" ? TabContextMenu : null;
  if (ctxMenu && typeof ctxMenu.moveTabsToNewGroup === "function") {
  try {
- ctxMenu.contextTab = tabs.includes(gBrowser.selectedTab) ? gBrowser.selectedTab : tabs[0];
+ ctxMenu.contextTab = tabs.includes(gBrowser.selectedTab) ? gBrowser.selectedTab : tabs;
  ctxMenu.contextTabs = tabs;
  ctxMenu.moveTabsToNewGroup();
- if (DEBUG) dlog(T(), "TabContextMenu.moveTabsToNewGroup を呼びました");
- } catch (e) {
- dlog(T(), "moveTabsToNewGroup でエラー:", String(e));
- }
+ } catch (e) { dlog("moveTabsToNewGroup でエラー:", String(e)); }
  }
 
- let group = tabs[0].group;
+ let group = tabs.group;
  if (!group) {
  group = gBrowser.addTabGroup(tabs, {
- insertBefore: tabs[0],
+ insertBefore: tabs,
  isUserTriggered: true,
  telemetryUserCreateSource: "shortcut",
  });
- if (DEBUG) dlog(T(), "自前で addTabGroup しました");
  }
  if (!group) return;
 
+    // ★核心部分：MacのIMEをシステムレベルで強制同期させる
     whenLaidOut(group, () => {
       try {
         const m = gBrowser.tabGroupMenu;
         if (!m) return;
         if (!m.isConnected) document.getElementById("mainPopupSet").appendChild(m);
-        if (DEBUG) { hookPanelEvents(m); dlog(T(), "パネル確認 state =", m.panel && m.panel.state); }
         
         if (!isOpen(m)) {
           m.openCreateModal(group);
           
+          // モーダルが完全に表示されるのを待ってから特権命令を飛ばす
           setTimeout(() => {
             try {
               const panelInput = m.panel && m.panel.querySelector("input, moz-input-text");
               if (panelInput) {
-                panelInput.blur();
+                // 1. まず通常のJavaScriptフォーカスを当てる
                 panelInput.focus();
+                
+                // 2. 【Mac IME専用の特権命令】
+                // Firefoxのフォーカス管理システム（nsIFocusManager）に対して、
+                // 「今フォーカスが当たっているこの要素に、OSレベルの入力権限（IME含む）を強制同期しろ」と命令を出す
+                // これにより、MacのOS側が「ここが入力欄だ」と強制的に認識させられます
+                Services.focus.focusedElement = panelInput;
+                
                 if (typeof panelInput.select === "function") panelInput.select();
+                if (DEBUG) dlog("MacのOSに入力フォーカスの強制同期命令を送信しました");
               }
-            } catch (_) {}
-          }, 60);
+            } catch (err) { if (DEBUG) dlog("特権フォーカス失敗:", String(err)); }
+          }, 80); // 猶予を少し伸ばして 80ms
         }
         
         if (DEBUG) debugPanel(m);
@@ -212,14 +204,17 @@
 
  // ---------- ブラウザウィンドウ: キーを受け取る ----------
 
-  // 完全に消失していた、ショートカットキーの判定および実行振り分けロジックをここに復元
-  function handleKeyUp(e) {
+  function handleKeyDown(e) {
     const pressed = fromEvent(e);
     
     if (same(pressed, stored("group"))) {
       e.preventDefault();
       e.stopPropagation();
-      groupSelected();
+      
+      // keydownの瞬間イベントループを完全に断ち切り、まっさらなスレッドで実行
+      setTimeout(() => {
+        groupSelected();
+      }, 10);
       return;
     }
 
@@ -233,10 +228,10 @@
   function initBrowser() {
     if (window.__ngsActive) return;
     window.__ngsActive = true;
-    if (DEBUG) dlog("loaded v0.3.0 - Mac KeyUp Fix");
+    if (DEBUG) dlog("loaded v0.4.0 - Privilege Focus Force Sync");
 
-    // keydown ではなく keyup（指を離した瞬間）にイベントをバインド
-    window.addEventListener("keyup", handleKeyUp, true);
+    // 標準の安定した keydown に据え置き
+    window.addEventListener("keydown", handleKeyDown, true);
   }
 
   if (location.href === "chrome://browser/content/browser.xhtml") {
@@ -247,3 +242,4 @@
     }
   }
 })();
+
