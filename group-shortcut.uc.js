@@ -35,7 +35,7 @@ function groupSelected() {
         if (DEBUG) dlog(T(), "自前で addTabGroup しました");
       }
       if (!group) return;
-
+        
       // 3) パネルの展開
       whenLaidOut(group, () => {
         try {
@@ -44,30 +44,49 @@ function groupSelected() {
           if (!m.isConnected) document.getElementById("mainPopupSet").appendChild(m);
           if (DEBUG) { hookPanelEvents(m); dlog(T(), "パネル確認 state =", m.panel && m.panel.state); }
           
+          // ★2回目以降の対策：すでに開いていて閉じられた後のパネルの状態を完全にクリーンにする
+          const p = m.panel;
+          if (p) {
+            // 前回の入力フォーカスが内部に残っていると2回目にIMEがバグるため、一度ボカす（外す）
+            const oldInput = p.querySelector("input, moz-input-text");
+            if (oldInput && document.activeElement === oldInput) {
+              oldInput.blur();
+            }
+            
+            // MacのOS側に「ウインドウとパネルのアクティブ状態」を強制再認識させる
+            if (typeof p.moveTo === "function" && p.state === "open") {
+              // すでに開いているバグ防止
+              p.hidePopup();
+            }
+          }
+
           if (!isOpen(m)) {
             m.openCreateModal(group);
           }
 
-          // ★重要: パネルが開いた（要素が画面にマウントされた）直後、
-          // さらに一瞬だけ待ってから内部の input 要素に強制的にフォーカスとIMEをアタッチさせる
-          setTimeout(() => {
-            try {
-              const panelInput = m.panel && m.panel.querySelector("input, moz-input-text");
-              if (panelInput) {
-                if (DEBUG) dlog(T(), "input 要素に遅延フォーカスを要求します");
-                panelInput.focus();
-                // 必要に応じて、完全に選択状態にする
-                if (typeof panelInput.select === "function") panelInput.select();
+          // ★重要: 2回目以降はさらに描画タイミングがシビアになるため、
+          // requestAnimationFrame を挟んでブラウザの描画ツリーが更新された後にフォーカスを当てます
+          requestAnimationFrame(() => {
+            setTimeout(() => {
+              try {
+                const panelInput = m.panel && m.panel.querySelector("input, moz-input-text");
+                if (panelInput) {
+                  if (DEBUG) dlog(T(), "input 要素に強制再フォーカスを要求します");
+                  
+                  // 一度確実にフォーカスを奪うため、ウインドウ自体のフォーカスを確定させてから input へ
+                  window.focus(); 
+                  
+                  panelInput.focus();
+                  if (typeof panelInput.select === "function") panelInput.select();
+                }
+              } catch (innerErr) {
+                if (DEBUG) dlog("遅延フォーカス失敗:", String(innerErr));
               }
-            } catch (innerErr) {
-              if (DEBUG) dlog("遅延フォーカス失敗:", String(innerErr));
-            }
-          }, 100); // 100ms程度のウェイトを入れるとMacのIMEが追随しやすくなります
+            }, 150); // 2回目以降のIME追随を安定させるため少し長めの150ms
+          });
 
           if (DEBUG) debugPanel(m);
         } catch (e) {
           console.error("[NativeGroupShortcut] パネルを開けませんでした:", e);
         }
       });
-    }, 50); // キーイベント完了を待つための 50ms ディレイ
-  }
