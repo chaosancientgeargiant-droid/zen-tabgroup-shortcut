@@ -20,6 +20,8 @@
  const PURE_MODS = ["Control", "Shift", "Alt", "Meta", "OS", "AltGraph"];
  const UNUSABLE = ["Dead", "Process", "Unidentified"];
 
+ // ---------- 動作 ----------
+
  function targetTabs() {
  return gBrowser.selectedTabs && gBrowser.selectedTabs.length
  ? gBrowser.selectedTabs
@@ -48,20 +50,13 @@
  const tabs = targetTabs().filter((t) => !t.pinned);
  if (!tabs.length) return;
 
- // ★対策1: パネルを開く前に、ウィンドウ全体のキーボード・グラブ（独占状態）を強制解放する
- try {
-   if (typeof window.setKeyboardGrab === "function") {
-     window.setKeyboardGrab(false);
-   }
- } catch (e) { if (DEBUG) dlog("Grab解放失敗:", String(e)); }
-
  const ctxMenu = typeof TabContextMenu !== "undefined" ? TabContextMenu : null;
  if (ctxMenu && typeof ctxMenu.moveTabsToNewGroup === "function") {
  try {
    ctxMenu.contextTab = tabs.includes(gBrowser.selectedTab) ? gBrowser.selectedTab : tabs;
    ctxMenu.contextTabs = tabs;
    ctxMenu.moveTabsToNewGroup();
- } catch (e) { dlog("moveTabsToNewGroup エラー:", String(e)); }
+ } catch (e) { if (DEBUG) dlog("moveTabsToNewGroup エラー:", String(e)); }
  }
 
  let group = tabs.group;
@@ -83,24 +78,17 @@
         if (!isOpen(m)) {
           m.openCreateModal(group);
           
+          // モーダルが描画を終えたタイミングでフォーカスを確定させる
           setTimeout(() => {
             try {
               const panelInput = m.panel && m.panel.querySelector("input, moz-input-text");
               if (panelInput) {
-                // ★対策2: 特権レイヤーからフォーカスを当て、さらにOS側にアクティブ状態を再通知
                 panelInput.focus();
                 Services.focus.focusedElement = panelInput;
-                
-                // 選択状態にする
                 if (typeof panelInput.select === "function") panelInput.select();
-                
-                // ★対策3: マカロン（IME）コンテキストのロック解除のためにウインドウにダミーの活性化シグナルを送る
-                if (m.panel && typeof m.panel.suppressblur !== "undefined") {
-                  m.panel.suppressblur = false;
-                }
               }
-            } catch (err) { if (DEBUG) dlog("特権フォーカス失敗:", String(err)); }
-          }, 80);
+            } catch (err) { if (DEBUG) dlog("フォーカス失敗:", String(err)); }
+          }, 50);
         }
       } catch (e) {
         console.error("[NativeGroupShortcut] パネルを開けませんでした:", e);
@@ -153,18 +141,20 @@
  catch (_) { return parse("Alt+G"); }
  };
 
+  // ---------- ブラウザウィンドウ: キーを受け取る ----------
   function handleKeyDown(e) {
     const pressed = fromEvent(e);
     
     if (same(pressed, stored("group"))) {
-      // ショートカットの既定処理を完全に殺す
+      // 1. まず現在のキーダウンイベントのブラウザ規定動作・バブリングを「完全切断」する
       e.preventDefault();
       e.stopPropagation();
       
-      // 次のマイクロタスクに処理を完全に逃がす
+      // 2. ★超重要: イベントループを完全に分離し、
+      // ショートカットの残響が100%消滅した直後の「完全にクリーンなタイマー」からグループ化を起動する
       setTimeout(() => {
         groupSelected();
-      }, 0);
+      }, 20);
       return;
     }
 
@@ -178,6 +168,8 @@
   function initBrowser() {
     if (window.__ngsActive) return;
     window.__ngsActive = true;
+    
+    // システムの最も深い段階（キャプチャフェーズ）で確実にフックする
     window.addEventListener("keydown", handleKeyDown, true);
   }
 
