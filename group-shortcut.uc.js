@@ -20,8 +20,6 @@
  const PURE_MODS = ["Control", "Shift", "Alt", "Meta", "OS", "AltGraph"];
  const UNUSABLE = ["Dead", "Process", "Unidentified"];
 
- // ---------- 動作 ----------
-
  function targetTabs() {
  return gBrowser.selectedTabs && gBrowser.selectedTabs.length
  ? gBrowser.selectedTabs
@@ -44,56 +42,26 @@
  const dlog = (...a) => console.log("[NativeGroupShortcut]", ...a);
  const T = () => Math.round(performance.now()) % 100000;
 
- function hookPanelEvents(menu) {
- const p = menu.panel;
- if (!p || p.__ngsHook) return;
- p.__ngsHook = true;
- p.addEventListener("popupshowing", () => dlog(T(), "popupshowing"));
- p.addEventListener("popupshown", () => dlog(T(), "popupshown"));
- p.addEventListener("popuphidden", () => dlog(T(), "popuphidden"));
- }
-
- function debugPanel(menu) {
- const log = dlog;
- setTimeout(() => {
- try {
- const p = menu.panel;
- const i = p && p.querySelector("input, moz-input-text");
- log("diag", JSON.stringify({
- state: p && p.state,
- activeInPanel: !!(p && p.contains(document.activeElement)),
- activeTag: document.activeElement && document.activeElement.localName,
- hasFocus: document.hasFocus(),
- focus: describeFocus(),
- }));
- } catch (e) { log("diag failed:", String(e)); }
- }, 500);
- }
-
- const isOpen = (m) => !!(m && m.panel && (m.panel.state === "showing" || m.panel.state === "open"));
-
- function describeFocus() {
- try {
- const fm = Services.focus;
- const el = fm.focusedElement;
- const w = fm.focusedWindow;
- let where = "?";
- try { where = w === window ? "本体ウィンドウ" : "コンテンツ(" + (w && w.location && w.location.protocol) + ")"; } catch (_) { where = "コンテンツ"; }
- return (el ? el.localName + (el.id ? "#" + el.id : "") : "(要素なし)") + " / " + where;
- } catch (e) { return "取得失敗: " + e; }
- }
+ function isOpen(m) { return !!(m && m.panel && (m.panel.state === "showing" || m.panel.state === "open")); }
 
  function groupSelected() {
  const tabs = targetTabs().filter((t) => !t.pinned);
  if (!tabs.length) return;
 
+ // ★対策1: パネルを開く前に、ウィンドウ全体のキーボード・グラブ（独占状態）を強制解放する
+ try {
+   if (typeof window.setKeyboardGrab === "function") {
+     window.setKeyboardGrab(false);
+   }
+ } catch (e) { if (DEBUG) dlog("Grab解放失敗:", String(e)); }
+
  const ctxMenu = typeof TabContextMenu !== "undefined" ? TabContextMenu : null;
  if (ctxMenu && typeof ctxMenu.moveTabsToNewGroup === "function") {
  try {
- ctxMenu.contextTab = tabs.includes(gBrowser.selectedTab) ? gBrowser.selectedTab : tabs;
- ctxMenu.contextTabs = tabs;
- ctxMenu.moveTabsToNewGroup();
- } catch (e) { dlog("moveTabsToNewGroup でエラー:", String(e)); }
+   ctxMenu.contextTab = tabs.includes(gBrowser.selectedTab) ? gBrowser.selectedTab : tabs;
+   ctxMenu.contextTabs = tabs;
+   ctxMenu.moveTabsToNewGroup();
+ } catch (e) { dlog("moveTabsToNewGroup エラー:", String(e)); }
  }
 
  let group = tabs.group;
@@ -106,7 +74,6 @@
  }
  if (!group) return;
 
-    // ★核心部分：MacのIMEをシステムレベルで強制同期させる
     whenLaidOut(group, () => {
       try {
         const m = gBrowser.tabGroupMenu;
@@ -116,28 +83,25 @@
         if (!isOpen(m)) {
           m.openCreateModal(group);
           
-          // モーダルが完全に表示されるのを待ってから特権命令を飛ばす
           setTimeout(() => {
             try {
               const panelInput = m.panel && m.panel.querySelector("input, moz-input-text");
               if (panelInput) {
-                // 1. まず通常のJavaScriptフォーカスを当てる
+                // ★対策2: 特権レイヤーからフォーカスを当て、さらにOS側にアクティブ状態を再通知
                 panelInput.focus();
-                
-                // 2. 【Mac IME専用の特権命令】
-                // Firefoxのフォーカス管理システム（nsIFocusManager）に対して、
-                // 「今フォーカスが当たっているこの要素に、OSレベルの入力権限（IME含む）を強制同期しろ」と命令を出す
-                // これにより、MacのOS側が「ここが入力欄だ」と強制的に認識させられます
                 Services.focus.focusedElement = panelInput;
                 
+                // 選択状態にする
                 if (typeof panelInput.select === "function") panelInput.select();
-                if (DEBUG) dlog("MacのOSに入力フォーカスの強制同期命令を送信しました");
+                
+                // ★対策3: マカロン（IME）コンテキストのロック解除のためにウインドウにダミーの活性化シグナルを送る
+                if (m.panel && typeof m.panel.suppressblur !== "undefined") {
+                  m.panel.suppressblur = false;
+                }
               }
             } catch (err) { if (DEBUG) dlog("特権フォーカス失敗:", String(err)); }
-          }, 80); // 猶予を少し伸ばして 80ms
+          }, 80);
         }
-        
-        if (DEBUG) debugPanel(m);
       } catch (e) {
         console.error("[NativeGroupShortcut] パネルを開けませんでした:", e);
       }
@@ -159,8 +123,6 @@
  { id: "ungroup", label: "グループから外す", run: ungroupSelected },
  ];
 
- // ---------- ショートカットの解釈 ----------
-
  function parse(str) {
  const s = { ctrl: false, alt: false, shift: false, meta: false, key: "" };
  for (const raw of (str || "").split("+")) {
@@ -170,16 +132,6 @@
  else s.key = t.length === 1 ? t.toUpperCase() : raw.trim();
  }
  return s;
- }
-
- function format(s) {
- const p = [];
- if (s.ctrl) p.push("Ctrl");
- if (s.alt) p.push("Alt");
- if (s.shift) p.push("Shift");
- if (s.meta) p.push(IS_MAC ? "Cmd" : "Super");
- if (s.key) p.push(s.key);
- return p.join("+");
  }
 
  function keyOf(e) {
@@ -196,25 +148,23 @@
  const same = (a, b) =>
  a.ctrl === b.ctrl && a.alt === b.alt && a.shift === b.shift && a.meta === b.meta && a.key === b.key;
 
- const DEFAULTS = { group: "Alt+G", ungroup: "Cmd+Shift+R" };
  const stored = (id) => {
- try { return parse(Services.prefs.getStringPref(PREF + id, DEFAULTS[id])); }
- catch (_) { return parse(DEFAULTS[id]); }
+ try { return parse(Services.prefs.getStringPref(PREF + id, "Alt+G")); }
+ catch (_) { return parse("Alt+G"); }
  };
-
- // ---------- ブラウザウィンドウ: キーを受け取る ----------
 
   function handleKeyDown(e) {
     const pressed = fromEvent(e);
     
     if (same(pressed, stored("group"))) {
+      // ショートカットの既定処理を完全に殺す
       e.preventDefault();
       e.stopPropagation();
       
-      // keydownの瞬間イベントループを完全に断ち切り、まっさらなスレッドで実行
+      // 次のマイクロタスクに処理を完全に逃がす
       setTimeout(() => {
         groupSelected();
-      }, 10);
+      }, 0);
       return;
     }
 
@@ -228,9 +178,6 @@
   function initBrowser() {
     if (window.__ngsActive) return;
     window.__ngsActive = true;
-    if (DEBUG) dlog("loaded v0.4.0 - Privilege Focus Force Sync");
-
-    // 標準の安定した keydown に据え置き
     window.addEventListener("keydown", handleKeyDown, true);
   }
 
@@ -242,4 +189,3 @@
     }
   }
 })();
-
