@@ -76,32 +76,29 @@
         if (!isOpen(m)) {
           m.openCreateModal(group);
           
-          // アニメーションが完全に終了し、入力欄の配置が落ち着くまで150ms待つ
+          // モーダルが完全に描画されるまで150ms待機
           setTimeout(() => {
             try {
               const panelInput = m.panel && m.panel.querySelector("input, moz-input-text");
               if (panelInput) {
-                // 1. フォーカスを当てる
+                // 右クリックメニューの「すべて選択」を内部で完全に再現する
+                // 1. ダミーのスペースを入れて選択対象を物理的に作る
+                panelInput.value = " "; 
                 panelInput.focus();
                 Services.focus.focusedElement = panelInput;
 
-                // 2. ★核心：エディターコンテキストの強制起動
-                // ダミーの値を代入し、即座にそれを選択状態にすることで、
-                // 右クリックメニューの「すべて選択」を実行したときと全く同じ「テキスト選択状態」を作ります。
-                // これにより、フリーズしていた入力システム（Editor）が強制的に目覚めます。
-                panelInput.value = " "; 
-                
-                // コマンドレベルでの全選択を実行（これでコンテキストが確実に開通します）
-                if (typeof panelInput.select === "function") {
-                  panelInput.select();
-                } else {
-                  panelInput.setSelectionRange(0, 1);
+                // 2. ★核心：右クリックメニューと同じ「ブラウザ特権コマンド」を強制発行
+                // これにより、通常のJS制限を突破してC++層のエディターが100%活性化します
+                if (typeof window.goDoCommand === "function") {
+                  window.goDoCommand("cmd_selectAll");
+                } else if (typeof goDoCommand === "function") {
+                  goDoCommand("cmd_selectAll");
                 }
 
-                if (DEBUG) dlog("エディターコンテキストの強制アクティベートを実行しました");
+                if (DEBUG) dlog("特権コマンド cmd_selectAll を実行しました");
               }
-            } catch (err) { if (DEBUG) dlog("アクティベート失敗:", String(err)); }
-          }, 150); // 時間を150msに引き伸ばして確実にマウントさせます
+            } catch (err) { if (DEBUG) dlog("特権コマンド実行失敗:", String(err)); }
+          }, 150);
         }
       } catch (e) {
         console.error("[NativeGroupShortcut] パネルを開けませんでした:", e);
