@@ -123,7 +123,6 @@
  }
  if (!group) return;
 
-    // 3) パネルがまだ開いていなければ開く
     whenLaidOut(group, () => {
       try {
         const m = gBrowser.tabGroupMenu;
@@ -163,6 +162,11 @@
  for (const t of tabs) gBrowser.ungroupTab(t);
  }
 
+ const ACTIONS = [
+ { id: "group", label: "グループ化", run: groupSelected },
+ { id: "ungroup", label: "グループから外す", run: ungroupSelected },
+ ];
+
  // ---------- ショートカットの解釈 ----------
 
  function parse(str) {
@@ -174,6 +178,16 @@
  else s.key = t.length === 1 ? t.toUpperCase() : raw.trim();
  }
  return s;
+ }
+
+ function format(s) {
+ const p = [];
+ if (s.ctrl) p.push("Ctrl");
+ if (s.alt) p.push("Alt");
+ if (s.shift) p.push("Shift");
+ if (s.meta) p.push(IS_MAC ? "Cmd" : "Super");
+ if (s.key) p.push(s.key);
+ return p.join("+");
  }
 
  function keyOf(e) {
@@ -198,7 +212,7 @@
 
  // ---------- ブラウザウィンドウ: キーを受け取る ----------
 
-  // 消えていたショートカット処理関数を復元
+  // 完全に消失していた、ショートカットキーの判定および実行振り分けロジックをここに復元
   function handleKeyUp(e) {
     const pressed = fromEvent(e);
     
@@ -221,11 +235,10 @@
     window.__ngsActive = true;
     if (DEBUG) dlog("loaded v0.3.0 - Mac KeyUp Fix");
 
-    // keyup（指を離した瞬間）にイベントを受け取る
+    // keydown ではなく keyup（指を離した瞬間）にイベントをバインド
     window.addEventListener("keyup", handleKeyUp, true);
   }
 
-  // 初期化スクリプトの発火
   if (location.href === "chrome://browser/content/browser.xhtml") {
     if (document.readyState === "complete") {
       initBrowser();
