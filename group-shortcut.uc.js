@@ -29,8 +29,6 @@
  }
 
  // パネルの貼り付け先(グループのラベル部分)が画面に配置されるまで待つ。
- // <tab-group> 自体は表示上の大きさが0なので、判定には使えない(実測で確認済み)。
- // 配置されなくても、最大12フレーム(約0.2秒)で待つのをやめる。
  const anchorOf = (g) =>
  g.querySelector(".tab-group-label-container") || g.labelElement || (g.tabs && g.tabs[0]) || g;
 
@@ -43,12 +41,10 @@
  requestAnimationFrame(step);
  }
 
- // 入力できない原因の調査用ログ(解決したら false に)
  const DEBUG = true;
  const dlog = (...a) => console.log("[NativeGroupShortcut]", ...a);
- const T = () => Math.round(performance.now()) % 100000; // 経過ミリ秒(同士を比べる用)
+ const T = () => Math.round(performance.now()) % 100000;
 
- // popupshown/popuphidden が何回起きるか(開き直しが起きていないか)を記録
  function hookPanelEvents(menu) {
  const p = menu.panel;
  if (!p || p.__ngsHook) return;
@@ -86,7 +82,6 @@
 
  const isOpen = (m) => !!(m && m.panel && (m.panel.state === "showing" || m.panel.state === "open"));
 
- // 今どこにフォーカスがあるかの記録用
  function describeFocus() {
  try {
  const fm = Services.focus;
@@ -101,14 +96,10 @@
  function groupSelected() {
  const tabs = targetTabs().filter((t) => !t.pinned);
  if (!tabs.length) return;
- // パネルを開く前に、Webページ(別プロセス)に残っているフォーカスを外す(仮説:文字入力がページ側に流れるのを防ぐ)
  if (DEBUG) dlog(T(), "実行前のフォーカス:", describeFocus());
  try { Services.focus.clearFocus(window); } catch (e) { dlog("clearFocus失敗:", String(e)); }
  if (DEBUG && gBrowser.tabGroupMenu) hookPanelEvents(gBrowser.tabGroupMenu);
 
- // 1) 右クリックメニューの「新しいグループにタブを追加」と同じ関数を呼ぶ。
- // (Firefox本体では addTabGroup のあと selectedTab の設定などもここで行う)
- // この関数は contextTab / contextTabs を参照するので、先に入れておく。
  const ctxMenu = typeof TabContextMenu !== "undefined" ? TabContextMenu : null;
  if (ctxMenu && typeof ctxMenu.moveTabsToNewGroup === "function") {
  try {
@@ -121,7 +112,6 @@
  }
  }
 
- // 2) 上で作れなかった場合だけ、自分で作る(ZenのaddTabGroupは insertBefore が必須)
  let group = tabs[0].group;
  if (!group) {
  group = gBrowser.addTabGroup(tabs, {
@@ -142,22 +132,18 @@
         if (DEBUG) { hookPanelEvents(m); dlog(T(), "パネル確認 state =", m.panel && m.panel.state); }
         
         if (!isOpen(m)) {
-          // モーダルが生成され、MacのOSがウィンドウのアクティブ状態を切り替え終えるのを
-          // サブスレッド（setTimeout）側で一瞬だけ待ちます。
           m.openCreateModal(group);
           
           setTimeout(() => {
             try {
               const panelInput = m.panel && m.panel.querySelector("input, moz-input-text");
               if (panelInput) {
-                // MacのIMEに新しいモーダル上の入力欄であることを正しく認識させるため、
-                // 一度フォーカスを外してから、再度ターゲットにフォーカスを当て直します。
                 panelInput.blur();
                 panelInput.focus();
                 if (typeof panelInput.select === "function") panelInput.select();
               }
             } catch (_) {}
-          }, 60); // 60ms（約4フレーム）のウェイトがMac環境では最も安定します
+          }, 60);
         }
         
         if (DEBUG) debugPanel(m);
@@ -165,6 +151,7 @@
         console.error("[NativeGroupShortcut] パネルを開けませんでした:", e);
       }
     });
+ }
 
  function ungroupSelected() {
  const tabs = targetTabs().filter((t) => t.group);
@@ -175,11 +162,6 @@
  }
  for (const t of tabs) gBrowser.ungroupTab(t);
  }
-
- const ACTIONS = [
- { id: "group", label: "グループ化", run: groupSelected },
- { id: "ungroup", label: "グループから外す", run: ungroupSelected },
- ];
 
  // ---------- ショートカットの解釈 ----------
 
@@ -194,17 +176,6 @@
  return s;
  }
 
- function format(s) {
- const p = [];
- if (s.ctrl) p.push("Ctrl");
- if (s.alt) p.push("Alt");
- if (s.shift) p.push("Shift");
- if (s.meta) p.push(IS_MAC ? "Cmd" : "Super");
- if (s.key) p.push(s.key);
- return p.join("+");
- }
-
- // Macの Option+G は e.key が「©」になるため、英数字は e.code から取る
  function keyOf(e) {
  if (PURE_MODS.includes(e.key)) return null;
  if (/^Key[A-Z]$/.test(e.code)) return e.code.slice(3);
@@ -216,12 +187,9 @@
  const fromEvent = (e) => ({
  ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, meta: e.metaKey, key: keyOf(e),
  });
- const complete = (s) => !!s.key && (s.ctrl || s.alt || s.meta);
  const same = (a, b) =>
  a.ctrl === b.ctrl && a.alt === b.alt && a.shift === b.shift && a.meta === b.meta && a.key === b.key;
 
- // Sineは設定画面を開いたときにしか既定値を保存しないため、未保存なら既定値を使う
- // (ユーザーが明示的に解除した場合は空文字が保存されるので、そのまま無効になる)
  const DEFAULTS = { group: "Alt+G", ungroup: "Cmd+Shift+R" };
  const stored = (id) => {
  try { return parse(Services.prefs.getStringPref(PREF + id, DEFAULTS[id])); }
@@ -230,11 +198,39 @@
 
  // ---------- ブラウザウィンドウ: キーを受け取る ----------
 
+  // 消えていたショートカット処理関数を復元
+  function handleKeyUp(e) {
+    const pressed = fromEvent(e);
+    
+    if (same(pressed, stored("group"))) {
+      e.preventDefault();
+      e.stopPropagation();
+      groupSelected();
+      return;
+    }
+
+    if (same(pressed, stored("ungroup"))) {
+      e.preventDefault();
+      e.stopPropagation();
+      ungroupSelected();
+    }
+  }
+
   function initBrowser() {
     if (window.__ngsActive) return;
     window.__ngsActive = true;
     if (DEBUG) dlog("loaded v0.3.0 - Mac KeyUp Fix");
 
-    // keydown ではなく keyup（指を離した瞬間）にイベントを受け取る
-    window.addEventListener("keyup", handleKeyDown, true);
+    // keyup（指を離した瞬間）にイベントを受け取る
+    window.addEventListener("keyup", handleKeyUp, true);
   }
+
+  // 初期化スクリプトの発火
+  if (location.href === "chrome://browser/content/browser.xhtml") {
+    if (document.readyState === "complete") {
+      initBrowser();
+    } else {
+      window.addEventListener("DOMContentLoaded", initBrowser, { once: true });
+    }
+  }
+})();
