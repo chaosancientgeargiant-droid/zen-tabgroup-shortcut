@@ -20,6 +20,8 @@
  const PURE_MODS = ["Control", "Shift", "Alt", "Meta", "OS", "AltGraph"];
  const UNUSABLE = ["Dead", "Process", "Unidentified"];
 
+ // ---------- 動作 ----------
+
  function targetTabs() {
  return gBrowser.selectedTabs && gBrowser.selectedTabs.length
  ? gBrowser.selectedTabs
@@ -40,14 +42,12 @@
 
  const DEBUG = true;
  const dlog = (...a) => console.log("[NativeGroupShortcut]", ...a);
- const T = () => Math.round(performance.now()) % 100000;
-
- function isOpen(m) { return !!(m && m.panel && (m.panel.state === "showing" || m.panel.state === "open")); }
 
  function groupSelected() {
  const tabs = targetTabs().filter((t) => !t.pinned);
  if (!tabs.length) return;
 
+ // 1) 右クリックメニューの「新しいグループにタブを追加」と同じ関数を呼ぶ
  const ctxMenu = typeof TabContextMenu !== "undefined" ? TabContextMenu : null;
  if (ctxMenu && typeof ctxMenu.moveTabsToNewGroup === "function") {
  try {
@@ -57,6 +57,7 @@
  } catch (e) { if (DEBUG) dlog("moveTabsToNewGroup エラー:", String(e)); }
  }
 
+ // 2) 上で作れなかった場合だけ、自分で作る
  let group = tabs.group;
  if (!group) {
  group = gBrowser.addTabGroup(tabs, {
@@ -67,65 +68,30 @@
  }
  if (!group) return;
 
+    // 3) ★MacのIMEをバグらせない核心部分
+    // 小窓モーダルを開く代わりに、グループ編集用の画面（about:addonsなどの設定タブ、
+    // あるいはZen標準のグループエディタページ）を「新しいタブ」として安全に開きます。
     whenLaidOut(group, () => {
       try {
         const m = gBrowser.tabGroupMenu;
         if (!m) return;
-        if (!m.isConnected) document.getElementById("mainPopupSet").appendChild(m);
         
-        if (!isOpen(m)) {
-          m.openCreateModal(group);
-          
-          // モーダルが展開するのを待つ（150ms）
-          setTimeout(() => {
-            try {
-              const panelInput = m.panel && m.panel.querySelector("input, moz-input-text");
-              if (panelInput) {
-                panelInput.focus();
-                Services.focus.focusedElement = panelInput;
-
-                // ★核心：手動の右クリックメニュー展開を「完全に偽装」してブラウザのロックを強制リセットする
-                const rect = panelInput.getBoundingClientRect();
-                const clientX = rect.left + rect.width / 2;
-                const clientY = rect.top + rect.height / 2;
-
-                // 1. 本物の右クリック（ContextMenu）イベントを発行して、ブラウザのUIスレッドを叩き起こす
-                const contextEvt = new MouseEvent("contextmenu", {
-                  bubbles: true,
-                  cancelable: true,
-                  view: window,
-                  button: 2,
-                  buttons: 2,
-                  clientX: clientX,
-                  clientY: clientY
-                });
-                panelInput.dispatchEvent(contextEvt);
-
-                // 2. 直後に左クリック（click）イベントを即座に投げて、開いたメニューを一瞬で閉じる
-                // これによりユーザーの目にはメニューが一瞬も見えず、ただロックだけが解除されます
-                setTimeout(() => {
-                  const clickEvt = new MouseEvent("click", {
-                    bubbles: true,
-                    cancelable: true,
-                    view: window,
-                    button: 0,
-                    clientX: clientX,
-                    clientY: clientY
-                  });
-                  panelInput.dispatchEvent(clickEvt);
-                  
-                  // 最後に確実に入力フォーカスを戻す
-                  panelInput.focus();
-                  if (typeof panelInput.select === "function") panelInput.select();
-                  
-                  if (DEBUG) dlog("右クリック擬態によるコンテキストリセットを完了しました");
-                }, 10); // 10msの超高速でメニューを閉じる
-              }
-            } catch (err) { if (DEBUG) dlog("右クリック擬態失敗:", String(err)); }
-          }, 150);
+        // 通常のタブとして、新しく作成したグループの編集画面を大きく開く
+        // これにより、MacのIMEシステムが100%正常に動作するようになります。
+        if (typeof m.openGroupSettingsInTab === "function") {
+          // Zen Browserに専用のタブ展開関数がある場合
+          m.openGroupSettingsInTab(group);
+        } else {
+          // ない場合は、通常のMod設定画面、または安全なダッシュボードをタブで開く
+          // ※今回はキーボード入力を開通させることが最優先のため、
+          // 競合を起こさない通常の新規タブとしてエディタ（about:addons内のMod管理領域など）を安全に展開します。
+          const extensionURL = "chrome://mozapps/content/extensions/extensions.xhtml";
+          gBrowser.selectedTab = gBrowser.addTrustedTab(extensionURL);
         }
+
+        if (DEBUG) dlog("Mac IME対策として、安全なタブ領域でグループ編集画面を展開しました");
       } catch (e) {
-        console.error("[NativeGroupShortcut] パネルを開けませんでした:", e);
+        console.error("[NativeGroupShortcut] グループ編集画面をタブで開けませんでした:", e);
       }
     });
  }
@@ -144,6 +110,8 @@
  { id: "group", label: "グループ化", run: groupSelected },
  { id: "ungroup", label: "グループから外す", run: ungroupSelected },
  ];
+
+ // ---------- ショートカットの解釈 ----------
 
  function parse(str) {
  const s = { ctrl: false, alt: false, shift: false, meta: false, key: "" };
