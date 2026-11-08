@@ -20,8 +20,6 @@
  const PURE_MODS = ["Control", "Shift", "Alt", "Meta", "OS", "AltGraph"];
  const UNUSABLE = ["Dead", "Process", "Unidentified"];
 
- // ---------- 動作 ----------
-
  function targetTabs() {
  return gBrowser.selectedTabs && gBrowser.selectedTabs.length
  ? gBrowser.selectedTabs
@@ -78,17 +76,32 @@
         if (!isOpen(m)) {
           m.openCreateModal(group);
           
-          // モーダルが描画を終えたタイミングでフォーカスを確定させる
+          // アニメーションが完全に終了し、入力欄の配置が落ち着くまで150ms待つ
           setTimeout(() => {
             try {
               const panelInput = m.panel && m.panel.querySelector("input, moz-input-text");
               if (panelInput) {
+                // 1. フォーカスを当てる
                 panelInput.focus();
                 Services.focus.focusedElement = panelInput;
-                if (typeof panelInput.select === "function") panelInput.select();
+
+                // 2. ★核心：エディターコンテキストの強制起動
+                // ダミーの値を代入し、即座にそれを選択状態にすることで、
+                // 右クリックメニューの「すべて選択」を実行したときと全く同じ「テキスト選択状態」を作ります。
+                // これにより、フリーズしていた入力システム（Editor）が強制的に目覚めます。
+                panelInput.value = " "; 
+                
+                // コマンドレベルでの全選択を実行（これでコンテキストが確実に開通します）
+                if (typeof panelInput.select === "function") {
+                  panelInput.select();
+                } else {
+                  panelInput.setSelectionRange(0, 1);
+                }
+
+                if (DEBUG) dlog("エディターコンテキストの強制アクティベートを実行しました");
               }
-            } catch (err) { if (DEBUG) dlog("フォーカス失敗:", String(err)); }
-          }, 50);
+            } catch (err) { if (DEBUG) dlog("アクティベート失敗:", String(err)); }
+          }, 150); // 時間を150msに引き伸ばして確実にマウントさせます
         }
       } catch (e) {
         console.error("[NativeGroupShortcut] パネルを開けませんでした:", e);
@@ -141,17 +154,13 @@
  catch (_) { return parse("Alt+G"); }
  };
 
-  // ---------- ブラウザウィンドウ: キーを受け取る ----------
   function handleKeyDown(e) {
     const pressed = fromEvent(e);
     
     if (same(pressed, stored("group"))) {
-      // 1. まず現在のキーダウンイベントのブラウザ規定動作・バブリングを「完全切断」する
       e.preventDefault();
       e.stopPropagation();
       
-      // 2. ★超重要: イベントループを完全に分離し、
-      // ショートカットの残響が100%消滅した直後の「完全にクリーンなタイマー」からグループ化を起動する
       setTimeout(() => {
         groupSelected();
       }, 20);
@@ -168,8 +177,6 @@
   function initBrowser() {
     if (window.__ngsActive) return;
     window.__ngsActive = true;
-    
-    // システムの最も深い段階（キャプチャフェーズ）で確実にフックする
     window.addEventListener("keydown", handleKeyDown, true);
   }
 
