@@ -76,28 +76,52 @@
         if (!isOpen(m)) {
           m.openCreateModal(group);
           
-          // モーダルが完全に描画されるまで150ms待機
+          // モーダルが展開するのを待つ（150ms）
           setTimeout(() => {
             try {
               const panelInput = m.panel && m.panel.querySelector("input, moz-input-text");
               if (panelInput) {
-                // 右クリックメニューの「すべて選択」を内部で完全に再現する
-                // 1. ダミーのスペースを入れて選択対象を物理的に作る
-                panelInput.value = " "; 
                 panelInput.focus();
                 Services.focus.focusedElement = panelInput;
 
-                // 2. ★核心：右クリックメニューと同じ「ブラウザ特権コマンド」を強制発行
-                // これにより、通常のJS制限を突破してC++層のエディターが100%活性化します
-                if (typeof window.goDoCommand === "function") {
-                  window.goDoCommand("cmd_selectAll");
-                } else if (typeof goDoCommand === "function") {
-                  goDoCommand("cmd_selectAll");
-                }
+                // ★核心：手動の右クリックメニュー展開を「完全に偽装」してブラウザのロックを強制リセットする
+                const rect = panelInput.getBoundingClientRect();
+                const clientX = rect.left + rect.width / 2;
+                const clientY = rect.top + rect.height / 2;
 
-                if (DEBUG) dlog("特権コマンド cmd_selectAll を実行しました");
+                // 1. 本物の右クリック（ContextMenu）イベントを発行して、ブラウザのUIスレッドを叩き起こす
+                const contextEvt = new MouseEvent("contextmenu", {
+                  bubbles: true,
+                  cancelable: true,
+                  view: window,
+                  button: 2,
+                  buttons: 2,
+                  clientX: clientX,
+                  clientY: clientY
+                });
+                panelInput.dispatchEvent(contextEvt);
+
+                // 2. 直後に左クリック（click）イベントを即座に投げて、開いたメニューを一瞬で閉じる
+                // これによりユーザーの目にはメニューが一瞬も見えず、ただロックだけが解除されます
+                setTimeout(() => {
+                  const clickEvt = new MouseEvent("click", {
+                    bubbles: true,
+                    cancelable: true,
+                    view: window,
+                    button: 0,
+                    clientX: clientX,
+                    clientY: clientY
+                  });
+                  panelInput.dispatchEvent(clickEvt);
+                  
+                  // 最後に確実に入力フォーカスを戻す
+                  panelInput.focus();
+                  if (typeof panelInput.select === "function") panelInput.select();
+                  
+                  if (DEBUG) dlog("右クリック擬態によるコンテキストリセットを完了しました");
+                }, 10); // 10msの超高速でメニューを閉じる
               }
-            } catch (err) { if (DEBUG) dlog("特権コマンド実行失敗:", String(err)); }
+            } catch (err) { if (DEBUG) dlog("右クリック擬態失敗:", String(err)); }
           }, 150);
         }
       } catch (e) {
