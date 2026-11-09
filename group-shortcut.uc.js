@@ -98,7 +98,8 @@
     } catch (e) { return "取得失敗: " + e; }
   }
 
-  function groupSelected() {
+  // 標準の名前・色パネルを開く版（ui = "panel" のとき）
+  function groupSelectedWithPanel() {
     const tabs = targetTabs().filter((t) => !t.pinned);
     if (!tabs.length) return;
     // パネルを開く前に、Webページ（別プロセス）に残っているフォーカスを外す（仮説：文字入力がページ側に流れるのを防ぐ）
@@ -145,6 +146,148 @@
       } catch (e) {
         console.error("[NativeGroupShortcut] パネルを開けませんでした:", e);
       }
+    });
+  }
+
+  // ---------- 名前と色を選ぶ画面（ウィンドウ内に出す通常の部品。ポップアップは使わない） ----------
+  // 標準パネルは、macOSで文字入力が通らないことがあった。サイドバー内の入力欄（ATG式のリネーム）は
+  // 入力できたため、同じ「ウィンドウ内の入力欄」で、名前と色を同時に選べる画面を作る。
+
+  const GROUP_COLORS = [
+    ["blue", "青"], ["purple", "紫"], ["cyan", "水色"], ["orange", "オレンジ"], ["yellow", "黄"],
+    ["pink", "ピンク"], ["green", "緑"], ["gray", "グレー"], ["red", "赤"],
+  ];
+  let dialog = null; // { root, group, input }
+
+  const uiMode = () => {
+    try { return Services.prefs.getStringPref(PREF + "ui", "dialog"); } catch (_) { return "dialog"; }
+  };
+
+  function onDialogOutsidePointerDown(e) {
+    if (dialog && !dialog.root.contains(e.target)) closeGroupDialog("outside");
+  }
+
+  // result: "ok"（完了） / "outside"（外をクリック: 入力済みの名前を保存して閉じる） / "cancel"（作成をやめる）
+  function closeGroupDialog(result) {
+    const d = dialog;
+    if (!d) return;
+    dialog = null;
+    document.removeEventListener("pointerdown", onDialogOutsidePointerDown, true);
+    const name = d.input.value.trim();
+    d.root.remove();
+    try {
+      if (result === "cancel") {
+        if (typeof d.group.ungroupTabs === "function") d.group.ungroupTabs(); // 標準パネルのキャンセルと同じく、グループを解除する
+      } else if (name) {
+        d.group.label = name;
+      }
+    } catch (e) {
+      console.error("[NativeGroupShortcut] グループへの反映に失敗:", e);
+    }
+  }
+
+  function showGroupDialog(group) {
+    closeGroupDialog("outside");
+    const h = (tag, props, css) => {
+      const el = document.createElementNS(XHTML, tag);
+      if (props) Object.assign(el, props);
+      if (css) el.style.cssText = css;
+      return el;
+    };
+
+    const root = h("div", { id: "ngs-group-dialog" },
+      "position:fixed;z-index:2147483000;width:264px;box-sizing:border-box;padding:12px;border-radius:8px;" +
+      "background:var(--arrowpanel-background,Canvas);color:var(--arrowpanel-color,CanvasText);" +
+      "border:1px solid var(--arrowpanel-border-color,GrayText);box-shadow:0 4px 16px rgba(0,0,0,.4);font:message-box;");
+    const title = h("div", { textContent: "タブグループを作成" }, "font-weight:600;margin-bottom:8px;");
+    const input = h("input", { type: "text", placeholder: "例: ショッピング" },
+      "width:100%;box-sizing:border-box;padding:6px 8px;border-radius:4px;" +
+      "border:1px solid var(--arrowpanel-border-color,GrayText);background:transparent;color:inherit;font:inherit;");
+    input.setAttribute("autocomplete", "off");
+    input.value = group.label || "";
+
+    const swatches = h("div", null, "display:flex;gap:8px;margin:10px 0 12px;");
+    const refresh = () => {
+      for (const b of swatches.children) b.style.outline = b.dataset.code === group.color ? "2px solid currentColor" : "none";
+    };
+    for (const [code, name] of GROUP_COLORS) {
+      const b = h("button", { type: "button", title: name },
+        "width:20px;height:20px;padding:0;border-radius:50%;border:none;outline-offset:2px;cursor:pointer;" +
+        "background:var(--tab-group-color-" + code + ");");
+      b.dataset.code = code;
+      b.addEventListener("click", () => {
+        try { group.color = code; } catch (e) { console.error("[NativeGroupShortcut] 色を設定できません:", e); }
+        refresh();
+      });
+      swatches.appendChild(b);
+    }
+
+    const buttons = h("div", null, "display:flex;justify-content:flex-end;gap:8px;");
+    const mkBtn = (text, onClick) => {
+      const b = h("button", { type: "button", textContent: text }, "padding:4px 12px;border-radius:4px;cursor:pointer;");
+      b.addEventListener("click", onClick);
+      return b;
+    };
+    buttons.append(mkBtn("キャンセル", () => closeGroupDialog("cancel")), mkBtn("完了", () => closeGroupDialog("ok")));
+
+    root.append(title, input, swatches, buttons);
+    root.addEventListener("keydown", (e) => {
+      e.stopPropagation(); // 入力中のキーを、他のショートカットに渡さない
+      if (e.key === "Enter" && e.target === input) {
+        if (e.isComposing || e.keyCode === 229) return; // 日本語の変換確定のEnterでは閉じない
+        closeGroupDialog("ok");
+      } else if (e.key === "Escape") {
+        closeGroupDialog("cancel");
+      }
+    });
+
+    // グループ名の近くに置く（画面からはみ出さないように調整）
+    const W = 264;
+    let top = 80, left = 16;
+    try {
+      const r = anchorOf(group).getBoundingClientRect();
+      top = Math.min(Math.max(r.bottom + 6, 8), Math.max(8, window.innerHeight - 220));
+      left = r.left > window.innerWidth / 2 ? r.right - W : r.left;
+      left = Math.min(Math.max(left, 8), Math.max(8, window.innerWidth - W - 8));
+    } catch (_) {}
+    root.style.top = top + "px";
+    root.style.left = left + "px";
+
+    document.documentElement.appendChild(root);
+    dialog = { root, group, input };
+    refresh();
+    document.addEventListener("pointerdown", onDialogOutsidePointerDown, true); // 外をクリックすれば、必ず閉じられる
+    input.focus();
+    input.select();
+    if (DEBUG) {
+      for (const t of ["keydown", "keypress", "beforeinput", "compositionstart", "input"]) {
+        input.addEventListener(t, (e) => dlog("名前入力:", t, e.key || e.inputType || "", t === "input" ? "value=" + input.value : ""));
+      }
+      setTimeout(() => dlog("名前入力欄にフォーカスあり:", document.activeElement === input), 300);
+    }
+  }
+
+  // グループを作って、名前と色の画面を出す（既定）。ui = "panel" なら、標準パネルを開く
+  function groupSelected() {
+    if (uiMode() === "panel") return groupSelectedWithPanel();
+    const tabs = targetTabs().filter((t) => !t.pinned);
+    if (!tabs.length) return;
+    let group = null;
+    try {
+      // isUserTriggered を付けない: 付けると、本体が標準パネルを自動で開いてしまう
+      group = gBrowser.addTabGroup(tabs, {
+        insertBefore: tabs[0], // ZenのaddTabGroupは insertBefore が必須
+        telemetryUserCreateSource: "shortcut",
+      });
+    } catch (e) {
+      dlog("addTabGroup でエラー:", String(e));
+      return;
+    }
+    if (!group) return;
+    whenLaidOut(group, () => {
+      // ATGが名前入力を始めている場合は、重ねて出さない
+      if (document.documentElement.hasAttribute("zen-renaming-group")) return;
+      showGroupDialog(group);
     });
   }
 
@@ -321,7 +464,7 @@
     window.__ngsActive = true;
     if (DEBUG) {
       const log = (...a) => console.log("[NativeGroupShortcut]", ...a);
-      log("loaded v0.3.1");
+      log("loaded v0.4.0");
       // パネル内のキー入力が、途中で止められていないかを見る（captureとbubbleで defaultPrevented を比べる）
       const inMenu = (e) => e.composedPath().some((n) => n.localName === "tabgroup-menu" || n.id === "tab-group-editor");
       window.addEventListener("keydown", (e) => {

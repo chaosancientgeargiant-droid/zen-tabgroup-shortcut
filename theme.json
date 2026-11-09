@@ -1,9 +1,9 @@
 {
     "id": "native-group-shortcut",
     "name": "Native Group Shortcut",
-    "description": "選択中のタブをグループ化して標準パネルを開く、グループから外す、グループ名を変更するショートカット。キーは設定画面で変更できます。",
+    "description": "選択中のタブをグループ化して、名前と色を選ぶ画面を出すショートカット。グループから外す／グループ名を変更するショートカットもあります。キーは設定画面で変更できます。",
     "author": "local",
-    "version": "0.3.1",
+    "version": "0.4.0",
     "scripts": {
         "group-shortcut.uc.js": {
             "name": "Core script",
@@ -26,5 +26,5 @@
         "zen"
     ],
     "createdAt": "2026-11-06",
-    "updatedAt": "2026-11-09T14:00:00Z"
+    "updatedAt": "2026-11-09T16:00:00Z"
 }
