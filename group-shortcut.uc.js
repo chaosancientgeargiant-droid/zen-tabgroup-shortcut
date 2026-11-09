@@ -163,10 +163,29 @@
   let renaming = null; // { group, label, input }
   const XHTML = "http://www.w3.org/1999/xhtml";
 
+  // 入力欄の外をクリックしたら、必ず取り消して元のグループ名を表示に戻す（入力が効かなくても抜けられるように）
+  function onOutsidePointerDown(e) {
+    if (renaming && e.target !== renaming.input) stopInlineRename(false);
+  }
+
+  // スクリプトの再読み込みなどで、前回の入力欄や目印が残っていたら片付ける
+  function cleanupStaleRename() {
+    try {
+      document.documentElement.removeAttribute("zen-renaming-group");
+      const stale = document.getElementById("ngs-group-rename-input");
+      if (stale) {
+        const l = stale.previousElementSibling;
+        if (l && l.classList) { l.classList.remove("tab-group-label-editing"); l.style.display = ""; }
+        stale.remove();
+      }
+    } catch (_) {}
+  }
+
   function stopInlineRename(commit) {
     const r = renaming;
     if (!r) return;
     renaming = null;
+    document.removeEventListener("pointerdown", onOutsidePointerDown, true);
     const value = r.input.value.trim();
     document.documentElement.removeAttribute("zen-renaming-group");
     r.input.remove();
@@ -220,8 +239,16 @@
       setTimeout(() => dlog("rename入力欄にフォーカスあり:", document.activeElement === input), 300);
     }
 
+    document.addEventListener("pointerdown", onOutsidePointerDown, true);
     input.focus();
     input.select();
+    // フォーカスが取れなかったら、元のグループ名を隠したままにしない
+    requestAnimationFrame(() => {
+      if (renaming && renaming.input === input && document.activeElement !== input) {
+        dlog("入力欄にフォーカスが取れなかったため、リネームを取り消しました");
+        stopInlineRename(false);
+      }
+    });
   }
 
   function renameCurrentGroup() {
@@ -289,11 +316,12 @@
   // ---------- ブラウザウィンドウ: キーを受け取る ----------
 
   function initBrowser() {
+    cleanupStaleRename(); // Sineがスクリプトを読み込み直した場合に、前回の状態が残らないようにする
     if (window.__ngsActive) return;
     window.__ngsActive = true;
     if (DEBUG) {
       const log = (...a) => console.log("[NativeGroupShortcut]", ...a);
-      log("loaded v0.3.0");
+      log("loaded v0.3.1");
       // パネル内のキー入力が、途中で止められていないかを見る（captureとbubbleで defaultPrevented を比べる）
       const inMenu = (e) => e.composedPath().some((n) => n.localName === "tabgroup-menu" || n.id === "tab-group-editor");
       window.addEventListener("keydown", (e) => {
