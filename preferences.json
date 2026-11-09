@@ -12,5 +12,12 @@
     "type": "string",
     "defaultValue": "Cmd+Shift+R",
     "placeholder": "クリックしてキーを押す"
+  },
+  {
+    "property": "mod.native-group-shortcut.rename",
+    "label": "現在のタブのグループ名を変更（サイドバー内の入力欄）",
+    "type": "string",
+    "defaultValue": "Alt+R",
+    "placeholder": "クリックしてキーを押す"
   }
 ]
