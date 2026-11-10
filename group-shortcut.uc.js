@@ -157,6 +157,12 @@
     ["blue", "青"], ["purple", "紫"], ["cyan", "水色"], ["orange", "オレンジ"], ["yellow", "黄"],
     ["pink", "ピンク"], ["green", "緑"], ["gray", "グレー"], ["red", "赤"],
   ];
+  // Firefoxの色用の変数（--tab-group-color-○○）がZenで定義されていないと、背景が透明になり、丸いボタンが見えない。
+  // そのため、変数が取れなければ、この固定の色を使う。
+  const FALLBACK_COLORS = {
+    blue: "#7eb2f2", purple: "#c9a0ee", cyan: "#6fd0dc", orange: "#f2a971", yellow: "#ecc94b",
+    pink: "#ee9fc3", green: "#86cf86", gray: "#9aa5b1", red: "#ee7a82",
+  };
   let dialog = null; // { root, group, input }
 
   const uiMode = () => {
@@ -210,10 +216,17 @@
     const refresh = () => {
       for (const b of swatches.children) b.style.outline = b.dataset.code === group.color ? "2px solid currentColor" : "none";
     };
+    let cs = null;
+    try { cs = getComputedStyle(group); } catch (_) {}
+    const colorOf = (code) => {
+      let v = "";
+      try { v = cs ? cs.getPropertyValue("--tab-group-color-" + code).trim() : ""; } catch (_) {}
+      return v || FALLBACK_COLORS[code];
+    };
     for (const [code, name] of GROUP_COLORS) {
       const b = h("button", { type: "button", title: name },
-        "width:20px;height:20px;padding:0;border-radius:50%;border:none;outline-offset:2px;cursor:pointer;" +
-        "background:var(--tab-group-color-" + code + ");");
+        "width:20px;height:20px;padding:0;border-radius:50%;border:1px solid rgba(128,128,128,.6);" +
+        "outline-offset:2px;cursor:pointer;background:" + colorOf(code) + ";");
       b.dataset.code = code;
       b.addEventListener("click", () => {
         try { group.color = code; } catch (e) { console.error("[NativeGroupShortcut] 色を設定できません:", e); }
@@ -289,6 +302,20 @@
       if (document.documentElement.hasAttribute("zen-renaming-group")) return;
       showGroupDialog(group);
     });
+  }
+
+  // 現在のタブが入っているグループを、折りたたむ／広げる
+  function toggleGroupCollapse() {
+    const group = gBrowser.selectedTab && gBrowser.selectedTab.group;
+    if (!group) {
+      dlog("現在のタブはグループに入っていません");
+      return;
+    }
+    try {
+      group.collapsed = !group.collapsed;
+    } catch (e) {
+      console.error("[NativeGroupShortcut] 折りたたみに失敗:", e);
+    }
   }
 
   function ungroupSelected() {
@@ -407,6 +434,7 @@
     { id: "group", label: "グループ化", run: groupSelected },
     { id: "ungroup", label: "グループから外す", run: ungroupSelected },
     { id: "rename", label: "グループ名を変更", run: renameCurrentGroup },
+    { id: "collapse", label: "グループを折りたたむ／広げる", run: toggleGroupCollapse },
   ];
 
   // ---------- ショートカットの解釈 ----------
@@ -450,7 +478,7 @@
 
   // Sineは設定画面を開いたときにしか既定値を保存しないため、未保存なら既定値を使う
   // （ユーザーが明示的に解除した場合は空文字が保存されるので、そのまま無効になる）
-  const DEFAULTS = { group: "Alt+G", ungroup: "Cmd+Shift+R", rename: "Alt+R" };
+  const DEFAULTS = { group: "Alt+G", ungroup: "Cmd+Shift+R", rename: "Alt+R", collapse: "Alt+C" };
   const stored = (id) => {
     try { return parse(Services.prefs.getStringPref(PREF + id, DEFAULTS[id])); }
     catch (_) { return parse(DEFAULTS[id]); }
@@ -464,7 +492,7 @@
     window.__ngsActive = true;
     if (DEBUG) {
       const log = (...a) => console.log("[NativeGroupShortcut]", ...a);
-      log("loaded v0.4.0");
+      log("loaded v0.4.1");
       // パネル内のキー入力が、途中で止められていないかを見る（captureとbubbleで defaultPrevented を比べる）
       const inMenu = (e) => e.composedPath().some((n) => n.localName === "tabgroup-menu" || n.id === "tab-group-editor");
       window.addEventListener("keydown", (e) => {

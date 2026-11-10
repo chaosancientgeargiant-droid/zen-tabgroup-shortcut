@@ -19,5 +19,12 @@
     "type": "string",
     "defaultValue": "Alt+R",
     "placeholder": "クリックしてキーを押す"
+  },
+  {
+    "property": "mod.native-group-shortcut.collapse",
+    "label": "現在のタブのグループを折りたたむ／広げる",
+    "type": "string",
+    "defaultValue": "Alt+C",
+    "placeholder": "クリックしてキーを押す"
   }
 ]
