@@ -305,14 +305,16 @@
   }
 
   // ---------- 折りたたみの表示と、グループ名のクリック ----------
-  // Zenだけでは、折りたたみの目印（collapsed）を付けても、中のタブが隠れない（隠すCSSがATGにはある）。
-  // そのため、同じ働きのCSSを足す。選択中のタブは、折りたたみ中も残る。
+  // Firefox本体の折りたたみは「グループ直下のタブ」を隠すCSSで動くが、Zenはタブを
+  // .tab-group-container という入れ物に入れているため、そのCSSが当たらない（ATGは別のCSSを持っている）。
+  // CSSの強さに左右されないよう、①高い優先度のCSSと、②中のタブへ直接書き込むスタイル、の両方で隠す。
   const COLLAPSE_CSS = `
-    tab-group .tab-group-container tab { transition: max-height .15s ease, opacity .15s ease, margin .15s ease; }
-    tab-group[collapsed] .tab-group-container tab:not([selected]) {
+    #tabbrowser-tabs tab-group .tab-group-container tab { transition: max-height .15s ease, opacity .15s ease, margin .15s ease; }
+    #tabbrowser-tabs tab-group[collapsed] .tab-group-container tab:not([selected]) {
       max-height: 0 !important; min-height: 0 !important; opacity: 0 !important;
       margin-block: 0 !important; pointer-events: none !important; overflow: hidden !important;
     }`;
+  const HIDE_MARK = "ngs-collapse-hidden";
 
   function injectCollapseCss() {
     const old = document.getElementById("ngs-collapse-style");
@@ -323,24 +325,68 @@
     document.documentElement.appendChild(st);
   }
 
-  // グループ名をクリックしたら、折りたたむ／広げる。
+  // 折りたたまれたグループの、選択中でないタブを隠す（それ以外は元に戻す）。自分が隠したタブだけを触る。
+  function syncGroupCollapse(group) {
+    const collapsed = group.hasAttribute("collapsed");
+    for (const tab of group.querySelectorAll("tab")) {
+      if (tab.closest("tab-group") !== group) continue; // 入れ子のグループの分は、そちらで処理する
+      const hide = collapsed && !tab.hasAttribute("selected");
+      if (hide) {
+        // 隠す前の display の値を、目印の値として覚えておく（戻すときに使う）
+        if (!tab.hasAttribute(HIDE_MARK)) tab.setAttribute(HIDE_MARK, tab.style.getPropertyValue("display") || "");
+        tab.style.setProperty("display", "none", "important");
+      } else if (tab.hasAttribute(HIDE_MARK)) {
+        const orig = tab.getAttribute(HIDE_MARK);
+        tab.style.removeProperty("display");
+        if (orig) tab.style.setProperty("display", orig);
+        tab.removeAttribute(HIDE_MARK);
+      }
+    }
+  }
+
+  function syncAllGroups() {
+    for (const g of document.querySelectorAll("tab-group")) {
+      try { syncGroupCollapse(g); } catch (e) { console.error("[NativeGroupShortcut] 折りたたみ表示の更新に失敗:", e); }
+    }
+  }
+
+  let syncQueued = false;
+  function queueSync() {
+    if (syncQueued) return;
+    syncQueued = true;
+    requestAnimationFrame(() => { syncQueued = false; syncAllGroups(); });
+  }
+
+  function watchCollapse() {
+    const target = document.getElementById("tabbrowser-tabs") || document.documentElement;
+    new MutationObserver(queueSync).observe(target, {
+      subtree: true, childList: true, attributes: true, attributeFilter: ["collapsed", "selected"],
+    });
+    syncAllGroups();
+  }
+
+  // グループ名（グループの見出し部分）をクリックしたら、折りたたむ／広げる。
   // 本体の処理がすでに切り替えた場合は、二重に切り替えない（クリック後に状態を見て、変わっていなければ切り替える）。
   function onGroupLabelClick(e) {
     if (e.button !== 0 || e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
     if (document.documentElement.hasAttribute("zen-renaming-group")) return;
     const path = typeof e.composedPath === "function" ? e.composedPath() : [];
+    const has = (n, c) => n && n.classList && n.classList.contains(c);
     // ボタンや入力欄のクリックは対象外
     if (path.some((n) => n && (n.localName === "input" || n.localName === "button" || n.localName === "toolbarbutton"))) return;
-    const onLabel = path.some((n) => n && n.classList &&
-      (n.classList.contains("tab-group-label") || n.classList.contains("tab-group-label-container")));
-    if (!onLabel) return;
     const group = path.find((n) => n && n.localName === "tab-group");
     if (!group) return;
+    const onTab = path.some((n) => n && n.localName === "tab");
+    const inContainer = path.some((n) => has(n, "tab-group-container"));
+    const onLabel = path.some((n) => has(n, "tab-group-label") || has(n, "tab-group-label-container"));
+    // 見出し部分（ラベル、またはタブの並びの外）のクリックだけを対象にする
+    if (!(onLabel || (!onTab && !inContainer))) return;
     const before = group.collapsed;
     setTimeout(() => {
       if (group.collapsed === before) {
         try { group.collapsed = !before; } catch (err) { console.error("[NativeGroupShortcut] 折りたたみに失敗:", err); }
       }
+      syncGroupCollapse(group);
     }, 0);
   }
 
@@ -353,6 +399,7 @@
     }
     try {
       group.collapsed = !group.collapsed;
+      syncGroupCollapse(group);
     } catch (e) {
       console.error("[NativeGroupShortcut] 折りたたみに失敗:", e);
     }
@@ -531,10 +578,11 @@
     if (window.__ngsActive) return;
     window.__ngsActive = true;
     injectCollapseCss();
+    watchCollapse();
     document.addEventListener("click", onGroupLabelClick, true);
     if (DEBUG) {
       const log = (...a) => console.log("[NativeGroupShortcut]", ...a);
-      log("loaded v0.5.0");
+      log("loaded v0.5.1");
       // パネル内のキー入力が、途中で止められていないかを見る（captureとbubbleで defaultPrevented を比べる）
       const inMenu = (e) => e.composedPath().some((n) => n.localName === "tabgroup-menu" || n.id === "tab-group-editor");
       window.addEventListener("keydown", (e) => {
