@@ -304,6 +304,46 @@
     });
   }
 
+  // ---------- 折りたたみの表示と、グループ名のクリック ----------
+  // Zenだけでは、折りたたみの目印（collapsed）を付けても、中のタブが隠れない（隠すCSSがATGにはある）。
+  // そのため、同じ働きのCSSを足す。選択中のタブは、折りたたみ中も残る。
+  const COLLAPSE_CSS = `
+    tab-group .tab-group-container tab { transition: max-height .15s ease, opacity .15s ease, margin .15s ease; }
+    tab-group[collapsed] .tab-group-container tab:not([selected]) {
+      max-height: 0 !important; min-height: 0 !important; opacity: 0 !important;
+      margin-block: 0 !important; pointer-events: none !important; overflow: hidden !important;
+    }`;
+
+  function injectCollapseCss() {
+    const old = document.getElementById("ngs-collapse-style");
+    if (old) old.remove();
+    const st = document.createElementNS(XHTML, "style");
+    st.id = "ngs-collapse-style";
+    st.textContent = COLLAPSE_CSS;
+    document.documentElement.appendChild(st);
+  }
+
+  // グループ名をクリックしたら、折りたたむ／広げる。
+  // 本体の処理がすでに切り替えた場合は、二重に切り替えない（クリック後に状態を見て、変わっていなければ切り替える）。
+  function onGroupLabelClick(e) {
+    if (e.button !== 0 || e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (document.documentElement.hasAttribute("zen-renaming-group")) return;
+    const path = typeof e.composedPath === "function" ? e.composedPath() : [];
+    // ボタンや入力欄のクリックは対象外
+    if (path.some((n) => n && (n.localName === "input" || n.localName === "button" || n.localName === "toolbarbutton"))) return;
+    const onLabel = path.some((n) => n && n.classList &&
+      (n.classList.contains("tab-group-label") || n.classList.contains("tab-group-label-container")));
+    if (!onLabel) return;
+    const group = path.find((n) => n && n.localName === "tab-group");
+    if (!group) return;
+    const before = group.collapsed;
+    setTimeout(() => {
+      if (group.collapsed === before) {
+        try { group.collapsed = !before; } catch (err) { console.error("[NativeGroupShortcut] 折りたたみに失敗:", err); }
+      }
+    }, 0);
+  }
+
   // 現在のタブが入っているグループを、折りたたむ／広げる
   function toggleGroupCollapse() {
     const group = gBrowser.selectedTab && gBrowser.selectedTab.group;
@@ -490,9 +530,11 @@
     cleanupStaleRename(); // Sineがスクリプトを読み込み直した場合に、前回の状態が残らないようにする
     if (window.__ngsActive) return;
     window.__ngsActive = true;
+    injectCollapseCss();
+    document.addEventListener("click", onGroupLabelClick, true);
     if (DEBUG) {
       const log = (...a) => console.log("[NativeGroupShortcut]", ...a);
-      log("loaded v0.4.1");
+      log("loaded v0.5.0");
       // パネル内のキー入力が、途中で止められていないかを見る（captureとbubbleで defaultPrevented を比べる）
       const inMenu = (e) => e.composedPath().some((n) => n.localName === "tabgroup-menu" || n.id === "tab-group-editor");
       window.addEventListener("keydown", (e) => {
