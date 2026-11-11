@@ -3,7 +3,7 @@
     "name": "Native Group Shortcut",
     "description": "選択中のタブをグループ化して名前と色を選ぶ、グループから外す、グループ名を変更する、グループを折りたたむショートカット。グループ名のクリックでも折りたためます。キーは設定画面で変更できます。",
     "author": "local",
-    "version": "0.5.1",
+    "version": "0.6.0",
     "scripts": {
         "group-shortcut.uc.js": {
             "name": "Core script",
@@ -26,5 +26,5 @@
         "zen"
     ],
     "createdAt": "2026-11-06",
-    "updatedAt": "2026-11-09T22:00:00Z"
+    "updatedAt": "2026-11-11T06:00:00Z"
 }

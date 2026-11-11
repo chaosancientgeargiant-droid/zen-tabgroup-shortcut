@@ -316,12 +316,29 @@
     }`;
   const HIDE_MARK = "ngs-collapse-hidden";
 
+  // グループの範囲が分かるようにする見た目。グループの色（--tab-group-color）で、
+  // タブの並びの左に縦線を通し、うすい背景を敷く。（<tab-group> 自体は表示上の大きさが0なので、中の要素に付ける）
+  const LOOK_CSS = `
+    #tabbrowser-tabs tab-group .tab-group-container {
+      box-shadow: inset 4px 0 0 0 var(--tab-group-color) !important;
+      background: color-mix(in srgb, var(--tab-group-color) 10%, transparent) !important;
+      border-radius: 6px !important;
+      padding-inline-start: 6px !important;
+    }
+    #tabbrowser-tabs tab-group[collapsed]:not(:has(tab[selected])) .tab-group-container {
+      box-shadow: none !important; background: none !important; padding: 0 !important;
+    }`;
+
+  const lookEnabled = () => {
+    try { return Services.prefs.getBoolPref(PREF + "group-look", true); } catch (_) { return true; }
+  };
+
   function injectCollapseCss() {
     const old = document.getElementById("ngs-collapse-style");
     if (old) old.remove();
     const st = document.createElementNS(XHTML, "style");
     st.id = "ngs-collapse-style";
-    st.textContent = COLLAPSE_CSS;
+    st.textContent = COLLAPSE_CSS + (lookEnabled() ? LOOK_CSS : "");
     document.documentElement.appendChild(st);
   }
 
@@ -578,11 +595,18 @@
     if (window.__ngsActive) return;
     window.__ngsActive = true;
     injectCollapseCss();
+    try {
+      const obs = { observe: () => injectCollapseCss() };
+      Services.prefs.addObserver(PREF + "group-look", obs);
+      window.addEventListener("unload", () => {
+        try { Services.prefs.removeObserver(PREF + "group-look", obs); } catch (_) {}
+      }, { once: true });
+    } catch (_) {}
     watchCollapse();
     document.addEventListener("click", onGroupLabelClick, true);
     if (DEBUG) {
       const log = (...a) => console.log("[NativeGroupShortcut]", ...a);
-      log("loaded v0.5.1");
+      log("loaded v0.6.0");
       // パネル内のキー入力が、途中で止められていないかを見る（captureとbubbleで defaultPrevented を比べる）
       const inMenu = (e) => e.composedPath().some((n) => n.localName === "tabgroup-menu" || n.id === "tab-group-editor");
       window.addEventListener("keydown", (e) => {

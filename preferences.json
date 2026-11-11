@@ -26,5 +26,11 @@
     "type": "string",
     "defaultValue": "Alt+C",
     "placeholder": "クリックしてキーを押す"
+  },
+  {
+    "property": "mod.native-group-shortcut.group-look",
+    "type": "checkbox",
+    "label": "タブグループの範囲を、色の縦線とうすい背景で分かりやすくする",
+    "defaultValue": true
   }
 ]
