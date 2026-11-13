@@ -46,6 +46,7 @@
   // 入力できない原因の調査用ログ（解決したら false に）
   const DEBUG = true;
   const dlog = (...a) => console.log("[NativeGroupShortcut]", ...a);
+  const XHTML = "http://www.w3.org/1999/xhtml";
   const T = () => Math.round(performance.now()) % 100000; // 経過ミリ秒（同士を比べる用）
 
   // popupshown/popuphidden が何回起きるか（開き直しが起きていないか）を記録
@@ -157,13 +158,14 @@
     ["blue", "青"], ["purple", "紫"], ["cyan", "水色"], ["orange", "オレンジ"], ["yellow", "黄"],
     ["pink", "ピンク"], ["green", "緑"], ["gray", "グレー"], ["red", "赤"],
   ];
-  // Firefoxの色用の変数（--tab-group-color-○○）がZenで定義されていないと、背景が透明になり、丸いボタンが見えない。
-  // そのため、変数が取れなければ、この固定の色を使う。
-  const FALLBACK_COLORS = {
-    blue: "#7eb2f2", purple: "#c9a0ee", cyan: "#6fd0dc", orange: "#f2a971", yellow: "#ecc94b",
-    pink: "#ee9fc3", green: "#86cf86", gray: "#9aa5b1", red: "#ee7a82",
+  // グループの色（彩度を高めにしたもの）。[0] = ライトテーマでのグループ名の背景（ダークテーマで折りたたんだときも使われる）、
+  // [1] = ダークテーマでのグループ名の背景（明るめ）。CSSで本体の色を上書きし、名前と色の画面の丸いボタンにも使う。
+  const VIVID = {
+    blue: ["#1f6feb", "#4f9bff"], purple: ["#8a3ffc", "#b07cff"], cyan: ["#0b9fb8", "#22d3ee"],
+    orange: ["#e8730c", "#ff9a3d"], yellow: ["#d9a400", "#ffd426"], pink: ["#e0307f", "#ff5fa8"],
+    green: ["#1f9d55", "#3ddc84"], gray: ["#5e6a77", "#a9b6c6"], red: ["#d92d3a", "#ff5c5c"],
   };
-  let dialog = null; // { root, group, input }
+  let dialog = null; // { root, group, input, edit, orig }
 
   const uiMode = () => {
     try { return Services.prefs.getStringPref(PREF + "ui", "dialog"); } catch (_) { return "dialog"; }
@@ -173,17 +175,22 @@
     if (dialog && !dialog.root.contains(e.target)) closeGroupDialog("outside");
   }
 
-  // result: "ok"（完了） / "outside"（外をクリック: 入力済みの名前を保存して閉じる） / "cancel"（作成をやめる）
+  // result: "ok"（完了） / "outside"（外をクリック: 入力済みの名前を保存して閉じる） / "cancel"（作成をやめる。編集なら、色を元に戻す）
   function closeGroupDialog(result) {
     const d = dialog;
     if (!d) return;
     dialog = null;
     document.removeEventListener("pointerdown", onDialogOutsidePointerDown, true);
     const name = d.input.value.trim();
+    try { d.input.blur(); } catch (_) {} // フォーカスを外してから消す
     d.root.remove();
     try {
       if (result === "cancel") {
-        if (typeof d.group.ungroupTabs === "function") d.group.ungroupTabs(); // 標準パネルのキャンセルと同じく、グループを解除する
+        if (d.edit) {
+          if (d.orig.color) d.group.color = d.orig.color; // 編集のキャンセルは、色を元に戻すだけ
+        } else if (typeof d.group.ungroupTabs === "function") {
+          d.group.ungroupTabs(); // 作成のキャンセルは、標準パネルと同じく、グループを解除する
+        }
       } else if (name) {
         d.group.label = name;
       }
@@ -192,8 +199,10 @@
     }
   }
 
-  function showGroupDialog(group) {
+  function showGroupDialog(group, opts = {}) {
     closeGroupDialog("outside");
+    const edit = !!opts.edit;
+    const orig = { label: group.label || "", color: group.color };
     const h = (tag, props, css) => {
       const el = document.createElementNS(XHTML, tag);
       if (props) Object.assign(el, props);
@@ -205,7 +214,7 @@
       "position:fixed;z-index:2147483000;width:264px;box-sizing:border-box;padding:12px;border-radius:8px;" +
       "background:var(--arrowpanel-background,Canvas);color:var(--arrowpanel-color,CanvasText);" +
       "border:1px solid var(--arrowpanel-border-color,GrayText);box-shadow:0 4px 16px rgba(0,0,0,.4);font:message-box;");
-    const title = h("div", { textContent: "タブグループを作成" }, "font-weight:600;margin-bottom:8px;");
+    const title = h("div", { textContent: edit ? "タブグループを編集" : "タブグループを作成" }, "font-weight:600;margin-bottom:8px;");
     const input = h("input", { type: "text", placeholder: "例: ショッピング" },
       "width:100%;box-sizing:border-box;padding:6px 8px;border-radius:4px;" +
       "border:1px solid var(--arrowpanel-border-color,GrayText);background:transparent;color:inherit;font:inherit;");
@@ -216,13 +225,9 @@
     const refresh = () => {
       for (const b of swatches.children) b.style.outline = b.dataset.code === group.color ? "2px solid currentColor" : "none";
     };
-    let cs = null;
-    try { cs = getComputedStyle(group); } catch (_) {}
-    const colorOf = (code) => {
-      let v = "";
-      try { v = cs ? cs.getPropertyValue("--tab-group-color-" + code).trim() : ""; } catch (_) {}
-      return v || FALLBACK_COLORS[code];
-    };
+    // 丸いボタンの色は、グループ名と同じ色（ライト/ダークで切り替わる）。変数が無ければ、固定の色を使う。
+    const colorOf = (code) =>
+      "light-dark(var(--tab-group-color-" + code + ", " + VIVID[code][0] + "), var(--tab-group-color-" + code + "-invert, " + VIVID[code][1] + "))";
     for (const [code, name] of GROUP_COLORS) {
       const b = h("button", { type: "button", title: name },
         "width:20px;height:20px;padding:0;border-radius:50%;border:1px solid rgba(128,128,128,.6);" +
@@ -248,9 +253,12 @@
       e.stopPropagation(); // 入力中のキーを、他のショートカットに渡さない
       if (e.key === "Enter" && e.target === input) {
         if (e.isComposing || e.keyCode === 229) return; // 日本語の変換確定のEnterでは閉じない
-        closeGroupDialog("ok");
+        e.preventDefault();
+        // キー入力の処理が終わってから閉じる（処理の途中で、フォーカス中の入力欄を消さないため）
+        setTimeout(() => closeGroupDialog("ok"), 0);
       } else if (e.key === "Escape") {
-        closeGroupDialog("cancel");
+        e.preventDefault();
+        setTimeout(() => closeGroupDialog("cancel"), 0);
       }
     });
 
@@ -267,7 +275,7 @@
     root.style.left = left + "px";
 
     document.documentElement.appendChild(root);
-    dialog = { root, group, input };
+    dialog = { root, group, input, edit, orig };
     refresh();
     document.addEventListener("pointerdown", onDialogOutsidePointerDown, true); // 外をクリックすれば、必ず閉じられる
     input.focus();
@@ -316,12 +324,27 @@
     }`;
   const HIDE_MARK = "ngs-collapse-hidden";
 
+  // Firefox本体は、折りたたんだグループ名の色を入れ替える（ダークでは、明るい色→濃い色。枠線も付く）。
+  // 展開時と同じ見た目のままにするため、展開時の色の指定（tabs.cssの .tab-group-label）をそのまま当てる。
+  const SAME_LABEL_CSS = `
+    #tabbrowser-tabs tab-group[collapsed] .tab-group-label {
+      background-color: light-dark(var(--tab-group-color), var(--tab-group-color-invert)) !important;
+      color: light-dark(var(--tab-group-color-pale), var(--tab-group-label-text-dark)) !important;
+      outline: none !important;
+    }`;
+
+  // 本体の色の定義（--tab-group-color-○○、-invert）を、彩度の高い色で上書きする。
+  const VIVID_CSS = ":root {" + Object.entries(VIVID)
+    .map(([c, [a, b]]) => "--tab-group-color-" + c + ":" + a + " !important;--tab-group-color-" + c + "-invert:" + b + " !important;")
+    .join("") + "}";
+
   // グループの範囲が分かるようにする見た目。グループの色（--tab-group-color）で、
   // タブの並びの左に縦線を通し、うすい背景を敷く。（<tab-group> 自体は表示上の大きさが0なので、中の要素に付ける）
   const LOOK_CSS = `
+    #tabbrowser-tabs tab-group { --ngs-accent: light-dark(var(--tab-group-color), var(--tab-group-color-invert)); }
     #tabbrowser-tabs tab-group .tab-group-container {
-      box-shadow: inset 4px 0 0 0 var(--tab-group-color) !important;
-      background: color-mix(in srgb, var(--tab-group-color) 10%, transparent) !important;
+      box-shadow: inset 4px 0 0 0 var(--ngs-accent) !important;
+      background: color-mix(in srgb, var(--ngs-accent) 14%, transparent) !important;
       border-radius: 6px !important;
       padding-inline-start: 6px !important;
     }
@@ -329,16 +352,18 @@
       box-shadow: none !important; background: none !important; padding: 0 !important;
     }`;
 
-  const lookEnabled = () => {
-    try { return Services.prefs.getBoolPref(PREF + "group-look", true); } catch (_) { return true; }
+  const prefBool = (name, def) => {
+    try { return Services.prefs.getBoolPref(PREF + name, def); } catch (_) { return def; }
   };
+  const lookEnabled = () => prefBool("group-look", true);
+  const vividEnabled = () => prefBool("vivid-colors", true);
 
   function injectCollapseCss() {
     const old = document.getElementById("ngs-collapse-style");
     if (old) old.remove();
     const st = document.createElementNS(XHTML, "style");
     st.id = "ngs-collapse-style";
-    st.textContent = COLLAPSE_CSS + (lookEnabled() ? LOOK_CSS : "");
+    st.textContent = COLLAPSE_CSS + SAME_LABEL_CSS + (lookEnabled() ? LOOK_CSS : "") + (vividEnabled() ? VIVID_CSS : "");
     document.documentElement.appendChild(st);
   }
 
@@ -432,17 +457,10 @@
     for (const t of tabs) gBrowser.ungroupTab(t);
   }
 
-  // ---------- グループ名の変更（ATGと同じ作り: サイドバー内の入力欄。ポップアップは使わない） ----------
+  // ---------- グループの編集（名前と色）: 名前と色の画面を、現在のグループ用に開く ----------
+  // 以前は、Zenのグループ名の表示に入力欄を差し込んでいた。Enterで落ちたため、Zenの表示には触れない作りにした。
 
-  let renaming = null; // { group, label, input }
-  const XHTML = "http://www.w3.org/1999/xhtml";
-
-  // 入力欄の外をクリックしたら、必ず取り消して元のグループ名を表示に戻す（入力が効かなくても抜けられるように）
-  function onOutsidePointerDown(e) {
-    if (renaming && e.target !== renaming.input) stopInlineRename(false);
-  }
-
-  // スクリプトの再読み込みなどで、前回の入力欄や目印が残っていたら片付ける
+  // 旧版が残した状態の片付け（Sineがスクリプトを読み込み直した場合に備える）
   function cleanupStaleRename() {
     try {
       document.documentElement.removeAttribute("zen-renaming-group");
@@ -455,89 +473,19 @@
     } catch (_) {}
   }
 
-  function stopInlineRename(commit) {
-    const r = renaming;
-    if (!r) return;
-    renaming = null;
-    document.removeEventListener("pointerdown", onOutsidePointerDown, true);
-    const value = r.input.value.trim();
-    document.documentElement.removeAttribute("zen-renaming-group");
-    r.input.remove();
-    r.label.classList.remove("tab-group-label-editing");
-    r.label.style.display = "";
-    if (commit && value && value !== r.group.label) {
-      try { r.group.label = value; } catch (e) { console.error("[NativeGroupShortcut] 名前を設定できません:", e); }
-    }
-  }
-
-  function startInlineRename(group) {
-    stopInlineRename(false);
-    const label = group.querySelector(".tab-group-label");
-    if (!label) {
-      dlog("グループのラベル要素が見つかりません");
-      return;
-    }
-    const input = document.createElementNS(XHTML, "input");
-    input.id = "ngs-group-rename-input";
-    input.className = "tab-group-label";
-    input.type = "text";
-    input.value = group.label || label.textContent || "";
-    input.setAttribute("autocomplete", "off");
-
-    document.documentElement.setAttribute("zen-renaming-group", "true"); // ATGのショートカットとの同時実行を避けるため、ATGと同じ目印を付ける
-    label.classList.add("tab-group-label-editing");
-    label.style.display = "none";
-    label.after(input);
-    renaming = { group, label, input };
-
-    input.addEventListener("keydown", (e) => {
-      e.stopPropagation(); // 入力中のキーを、他のショートカットに渡さない
-      if (e.key === "Enter") {
-        if (e.isComposing || e.keyCode === 229) return; // 日本語の変換確定のEnterでは閉じない
-        stopInlineRename(true);
-      } else if (e.key === "Escape") {
-        stopInlineRename(false);
-      }
-    });
-    input.addEventListener("blur", () => {
-      // ウィンドウ自体が非アクティブになっただけなら、入力を続けられるよう残す
-      if (document.activeElement === input) return;
-      stopInlineRename(false);
-    });
-
-    if (DEBUG) {
-      for (const t of ["keydown", "keypress", "beforeinput", "compositionstart", "input"]) {
-        input.addEventListener(t, (e) =>
-          dlog("rename入力欄:", t, e.key || e.inputType || "", t === "input" ? "value=" + input.value : ""));
-      }
-      setTimeout(() => dlog("rename入力欄にフォーカスあり:", document.activeElement === input), 300);
-    }
-
-    document.addEventListener("pointerdown", onOutsidePointerDown, true);
-    input.focus();
-    input.select();
-    // フォーカスが取れなかったら、元のグループ名を隠したままにしない
-    requestAnimationFrame(() => {
-      if (renaming && renaming.input === input && document.activeElement !== input) {
-        dlog("入力欄にフォーカスが取れなかったため、リネームを取り消しました");
-        stopInlineRename(false);
-      }
-    });
-  }
-
   function renameCurrentGroup() {
     const group = gBrowser.selectedTab && gBrowser.selectedTab.group;
     if (!group) {
       dlog("現在のタブはグループに入っていません");
       return;
     }
-    startInlineRename(group);
+    showGroupDialog(group, { edit: true });
   }
 
   const ACTIONS = [
     { id: "group", label: "グループ化", run: groupSelected },
     { id: "ungroup", label: "グループから外す", run: ungroupSelected },
-    { id: "rename", label: "グループ名を変更", run: renameCurrentGroup },
+    { id: "rename", label: "グループの名前と色を変更", run: renameCurrentGroup },
     { id: "collapse", label: "グループを折りたたむ／広げる", run: toggleGroupCollapse },
   ];
 
@@ -597,16 +545,16 @@
     injectCollapseCss();
     try {
       const obs = { observe: () => injectCollapseCss() };
-      Services.prefs.addObserver(PREF + "group-look", obs);
+      Services.prefs.addObserver(PREF, obs); // このmodの設定のどれかが変わったら、スタイルを入れ直す
       window.addEventListener("unload", () => {
-        try { Services.prefs.removeObserver(PREF + "group-look", obs); } catch (_) {}
+        try { Services.prefs.removeObserver(PREF, obs); } catch (_) {}
       }, { once: true });
     } catch (_) {}
     watchCollapse();
     document.addEventListener("click", onGroupLabelClick, true);
     if (DEBUG) {
       const log = (...a) => console.log("[NativeGroupShortcut]", ...a);
-      log("loaded v0.6.0");
+      log("loaded v0.7.0");
       // パネル内のキー入力が、途中で止められていないかを見る（captureとbubbleで defaultPrevented を比べる）
       const inMenu = (e) => e.composedPath().some((n) => n.localName === "tabgroup-menu" || n.id === "tab-group-editor");
       window.addEventListener("keydown", (e) => {

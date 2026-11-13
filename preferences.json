@@ -15,7 +15,7 @@
   },
   {
     "property": "mod.native-group-shortcut.rename",
-    "label": "現在のタブのグループ名を変更（サイドバー内の入力欄）",
+    "label": "現在のタブのグループの名前と色を変更（入力画面を開く）",
     "type": "string",
     "defaultValue": "Alt+R",
     "placeholder": "クリックしてキーを押す"
@@ -31,6 +31,12 @@
     "property": "mod.native-group-shortcut.group-look",
     "type": "checkbox",
     "label": "タブグループの範囲を、色の縦線とうすい背景で分かりやすくする",
+    "defaultValue": true
+  },
+  {
+    "property": "mod.native-group-shortcut.vivid-colors",
+    "type": "checkbox",
+    "label": "タブグループの色の彩度を高める",
     "defaultValue": true
   }
 ]
