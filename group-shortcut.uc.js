@@ -154,17 +154,28 @@
   // 標準パネルは、macOSで文字入力が通らないことがあった。サイドバー内の入力欄（ATG式のリネーム）は
   // 入力できたため、同じ「ウィンドウ内の入力欄」で、名前と色を同時に選べる画面を作る。
 
+  // 左から「青 → 赤」へ、色相を30°ずつ等間隔に並べた9色（彩度100%・明度50%の純色）。
+  // Firefox本体のグループ色は固定の9コードなので、次の順に割り当てる（コード名と見た目は一致しない）。
   const GROUP_COLORS = [
-    ["blue", "青"], ["purple", "紫"], ["cyan", "水色"], ["orange", "オレンジ"], ["yellow", "黄"],
-    ["pink", "ピンク"], ["green", "緑"], ["gray", "グレー"], ["red", "赤"],
+    ["blue", "青"], ["purple", "空色"], ["cyan", "シアン"], ["pink", "青緑"], ["green", "緑"],
+    ["gray", "黄緑"], ["yellow", "黄"], ["orange", "オレンジ"], ["red", "赤"],
   ];
-  // グループの色（彩度を高めにしたもの）。[0] = ライトテーマでのグループ名の背景（ダークテーマで折りたたんだときも使われる）、
-  // [1] = ダークテーマでのグループ名の背景（明るめ）。CSSで本体の色を上書きし、名前と色の画面の丸いボタンにも使う。
-  const VIVID = {
-    blue: ["#1f6feb", "#4f9bff"], purple: ["#8a3ffc", "#b07cff"], cyan: ["#0b9fb8", "#22d3ee"],
-    orange: ["#e8730c", "#ff9a3d"], yellow: ["#d9a400", "#ffd426"], pink: ["#e0307f", "#ff5fa8"],
-    green: ["#1f9d55", "#3ddc84"], gray: ["#5e6a77", "#a9b6c6"], red: ["#d92d3a", "#ff5c5c"],
+  const hslToHex = (h) => {
+    const f = (n) => { const k = (n + h / 30) % 12; return Math.round(255 * (0.5 - 0.5 * Math.max(-1, Math.min(k - 3, 9 - k, 1)))); };
+    return "#" + [f(0), f(8), f(4)].map((v) => v.toString(16).padStart(2, "0")).join("");
   };
+  const lumOf = (hex) => {
+    const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map((v) => (v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)));
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  };
+  // PALETTE[コード] = { color: 背景色, text: 文字色（白か黒の、コントラストが高い方） }
+  const PALETTE = {};
+  GROUP_COLORS.forEach(([code], i) => {
+    const color = hslToHex(240 - i * 30); // 240°(青) → 0°(赤)
+    const L = lumOf(color);
+    PALETTE[code] = { color, text: (1.05 / (L + 0.05)) >= ((L + 0.05) / 0.05) ? "#ffffff" : "#000000" };
+  });
   let dialog = null; // { root, group, input, edit, orig }
 
   const uiMode = () => {
@@ -225,9 +236,8 @@
     const refresh = () => {
       for (const b of swatches.children) b.style.outline = b.dataset.code === group.color ? "2px solid currentColor" : "none";
     };
-    // 丸いボタンの色は、グループ名と同じ色（ライト/ダークで切り替わる）。変数が無ければ、固定の色を使う。
-    const colorOf = (code) =>
-      "light-dark(var(--tab-group-color-" + code + ", " + VIVID[code][0] + "), var(--tab-group-color-" + code + "-invert, " + VIVID[code][1] + "))";
+    // 丸いボタンの色は、グループ名と同じ色。
+    const colorOf = (code) => PALETTE[code].color;
     for (const [code, name] of GROUP_COLORS) {
       const b = h("button", { type: "button", title: name },
         "width:20px;height:20px;padding:0;border-radius:50%;border:1px solid rgba(128,128,128,.6);" +
@@ -333,10 +343,19 @@
       outline: none !important;
     }`;
 
-  // 本体の色の定義（--tab-group-color-○○、-invert）を、彩度の高い色で上書きする。
-  const VIVID_CSS = ":root {" + Object.entries(VIVID)
-    .map(([c, [a, b]]) => "--tab-group-color-" + c + ":" + a + " !important;--tab-group-color-" + c + "-invert:" + b + " !important;")
-    .join("") + "}";
+  // 本体の色の定義（--tab-group-color-○○、-invert）を、青→赤の9色で上書きする。
+  // グループ名の文字色も、背景との相性で白/黒に固定する（黄や黄緑でも読めるように）。
+  const VIVID_CSS = ":root {" + Object.entries(PALETTE)
+    .map(([c, p]) => "--tab-group-color-" + c + ":" + p.color + " !important;--tab-group-color-" + c + "-invert:" + p.color + " !important;")
+    .join("") + "}" + Object.entries(PALETTE)
+    .map(([c, p]) => {
+      const g = '#tabbrowser-tabs tab-group[color="' + c + '"]';
+      return g + '{--tab-group-color:' + p.color + ' !important;--tab-group-color-invert:' + p.color + ' !important;--ngs-accent:' + p.color + ' !important;}' +
+        // 展開・折りたたみのどちらでも、グループ名の色は同じにする
+        g + ' .tab-group-label, ' + g + '[collapsed] .tab-group-label{background-color:' + p.color + ' !important;color:' + p.text + ' !important;' +
+        'opacity:1 !important;filter:none !important;outline:none !important;}';
+    })
+    .join("");
 
   // グループの範囲が分かるようにする見た目。グループの色（--tab-group-color）で、
   // タブの並びの左に縦線を通し、うすい背景を敷く。（<tab-group> 自体は表示上の大きさが0なので、中の要素に付ける）
@@ -356,14 +375,13 @@
     try { return Services.prefs.getBoolPref(PREF + name, def); } catch (_) { return def; }
   };
   const lookEnabled = () => prefBool("group-look", true);
-  const vividEnabled = () => prefBool("vivid-colors", true);
 
   function injectCollapseCss() {
     const old = document.getElementById("ngs-collapse-style");
     if (old) old.remove();
     const st = document.createElementNS(XHTML, "style");
     st.id = "ngs-collapse-style";
-    st.textContent = COLLAPSE_CSS + SAME_LABEL_CSS + (lookEnabled() ? LOOK_CSS : "") + (vividEnabled() ? VIVID_CSS : "");
+    st.textContent = COLLAPSE_CSS + SAME_LABEL_CSS + (lookEnabled() ? LOOK_CSS : "") + VIVID_CSS;
     document.documentElement.appendChild(st);
   }
 
