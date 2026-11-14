@@ -338,29 +338,33 @@
   // 展開時と同じ見た目のままにするため、展開時の色の指定（tabs.cssの .tab-group-label）をそのまま当てる。
   const SAME_LABEL_CSS = `
     #tabbrowser-tabs tab-group[collapsed] .tab-group-label {
-      background-color: light-dark(var(--tab-group-color), var(--tab-group-color-invert)) !important;
+      background-color: var(--tab-group-color) !important;
       color: light-dark(var(--tab-group-color-pale), var(--tab-group-label-text-dark)) !important;
       outline: none !important;
     }`;
 
-  // 本体の色の定義（--tab-group-color-○○、-invert）を、青→赤の9色で上書きする。
-  // グループ名の文字色も、背景との相性で白/黒に固定する（黄や黄緑でも読めるように）。
-  const VIVID_CSS = ":root {" + Object.entries(PALETTE)
-    .map(([c, p]) => "--tab-group-color-" + c + ":" + p.color + " !important;--tab-group-color-" + c + "-invert:" + p.color + " !important;")
-    .join("") + "}" + Object.entries(PALETTE)
-    .map(([c, p]) => {
-      const g = '#tabbrowser-tabs tab-group[color="' + c + '"]';
-      return g + '{--tab-group-color:' + p.color + ' !important;--tab-group-color-invert:' + p.color + ' !important;--ngs-accent:' + p.color + ' !important;}' +
-        // 展開・折りたたみのどちらでも、グループ名の色は同じにする
-        g + ' .tab-group-label, ' + g + '[collapsed] .tab-group-label{background-color:' + p.color + ' !important;color:' + p.text + ' !important;' +
+  // 本体の色の定義（--tab-group-○○、-invert、-pale、-text など）を、青→赤の9色で上書きする。
+  // さらに、グループごとにも（<tab-group>のstyle属性が var(--tab-group-○○) を指すことを手がかりに）
+  // 背景・文字・縦線の色を固定し、展開/折りたたみ・ライト/ダークで色が変わらないようにする。
+  const VIVID_CSS = ':root, tab-group {' + Object.entries(PALETTE).map(([c, p]) =>
+      '--tab-group-' + c + ':' + p.color + ' !important;' +
+      '--tab-group-' + c + '-invert:' + p.color + ' !important;' +
+      '--tab-group-' + c + '-pale:' + p.text + ' !important;' +
+      '--tab-group-' + c + '-text:' + p.text + ' !important;' +
+      '--tab-group-' + c + '-text-invert:' + p.text + ' !important;' +
+      '--tab-group-' + c + '-hover:color-mix(in srgb,' + p.color + ' 85%,black) !important;').join('') + '}' +
+    Object.entries(PALETTE).map(([c, p]) => {
+      const g = '#tabbrowser-tabs tab-group[style*=\"var(--tab-group-' + c + ')\"]';
+      return g + '{--tab-group-color:' + p.color + ' !important;--tab-group-color-invert:' + p.color + ' !important;' +
+        '--tab-group-color-pale:' + p.text + ' !important;--ngs-accent:' + p.color + ' !important;}' +
+        g + ' .tab-group-label,' + g + '[collapsed] .tab-group-label{background-color:' + p.color + ' !important;color:' + p.text + ' !important;' +
         'opacity:1 !important;filter:none !important;outline:none !important;}';
-    })
-    .join("");
+    }).join('');
 
   // グループの範囲が分かるようにする見た目。グループの色（--tab-group-color）で、
   // タブの並びの左に縦線を通し、うすい背景を敷く。（<tab-group> 自体は表示上の大きさが0なので、中の要素に付ける）
   const LOOK_CSS = `
-    #tabbrowser-tabs tab-group { --ngs-accent: light-dark(var(--tab-group-color), var(--tab-group-color-invert)); }
+    #tabbrowser-tabs tab-group { --ngs-accent: var(--tab-group-color); }
     #tabbrowser-tabs tab-group .tab-group-container {
       box-shadow: inset 4px 0 0 0 var(--ngs-accent) !important;
       background: color-mix(in srgb, var(--ngs-accent) 14%, transparent) !important;
