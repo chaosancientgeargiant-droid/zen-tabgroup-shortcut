@@ -348,7 +348,13 @@
   const VIVID_CSS = ":root {" + Object.entries(PALETTE)
     .map(([c, p]) => "--tab-group-color-" + c + ":" + p.color + " !important;--tab-group-color-" + c + "-invert:" + p.color + " !important;")
     .join("") + "}" + Object.entries(PALETTE)
-    .map(([c, p]) => '#tabbrowser-tabs tab-group[color="' + c + '"] .tab-group-label{color:' + p.text + ' !important;}')
+    .map(([c, p]) => {
+      const g = '#tabbrowser-tabs tab-group[color="' + c + '"]';
+      return g + '{--tab-group-color:' + p.color + ' !important;--tab-group-color-invert:' + p.color + ' !important;--ngs-accent:' + p.color + ' !important;}' +
+        // 展開・折りたたみのどちらでも、グループ名の色は同じにする
+        g + ' .tab-group-label, ' + g + '[collapsed] .tab-group-label{background-color:' + p.color + ' !important;color:' + p.text + ' !important;' +
+        'opacity:1 !important;filter:none !important;outline:none !important;}';
+    })
     .join("");
 
   // グループの範囲が分かるようにする見た目。グループの色（--tab-group-color）で、
