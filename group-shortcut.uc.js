@@ -408,7 +408,66 @@
     }
   }
 
+  // ---------- 展開/折りたたみ状態を、再起動後も保持する ----------
+  // グループのid（本体のセッション復元で保たれる）をキーに、状態を設定へ記録する。
+  // 起動後にグループが現れたら、記録された状態に合わせる。
+  const COLLAPSE_STATE_PREF = PREF + "collapsed-state";
+  const MAX_SAVED = 300;
+  const STARTED_AT = Date.now();
+  const seenGroups = new WeakSet();
+  const pendingSave = new Set();
+  const rememberEnabled = () => prefBool("remember-collapse", true);
+
+  function loadSaved() {
+    try {
+      const o = JSON.parse(Services.prefs.getStringPref(COLLAPSE_STATE_PREF, "{}"));
+      return o && typeof o === "object" && !Array.isArray(o) ? o : {};
+    } catch (_) { return {}; }
+  }
+
+  function writeSaved(o) {
+    try {
+      const keys = Object.keys(o);
+      while (keys.length > MAX_SAVED) delete o[keys.shift()]; // 古いものから捨てる
+      Services.prefs.setStringPref(COLLAPSE_STATE_PREF, JSON.stringify(o));
+    } catch (e) { console.error("[NativeGroupShortcut] 折りたたみ状態の保存に失敗:", e); }
+  }
+
+  function saveGroupState(group) {
+    if (!rememberEnabled() || !group.id) return;
+    const o = loadSaved(); // 他のウィンドウの分を消さないよう、毎回読み直してから書く
+    delete o[group.id];
+    o[group.id] = { c: group.hasAttribute("collapsed") ? 1 : 0, l: group.label || "" };
+    writeSaved(o);
+  }
+
+  function applySavedState(group) {
+    if (seenGroups.has(group)) return;
+    seenGroups.add(group);
+    if (!rememberEnabled()) return;
+    const o = loadSaved();
+    let st = group.id && o[group.id];
+    // idで見つからなくても、起動直後に限り、同じ名前のグループが1つだけならその状態を使う
+    if (!st && group.label && Date.now() - STARTED_AT < 20000) {
+      const same = Object.values(o).filter((v) => v && v.l === group.label);
+      if (same.length === 1) st = same[0];
+    }
+    if (!st) { saveGroupState(group); return; }
+    const want = !!st.c;
+    if (group.hasAttribute("collapsed") !== want) {
+      try { group.collapsed = want; } catch (e) { console.error("[NativeGroupShortcut] 折りたたみ状態の復元に失敗:", e); }
+    }
+    pendingSave.add(group); // idが変わっていた場合も、新しいidで記録し直す
+  }
+
   function syncAllGroups() {
+    for (const g of document.querySelectorAll("tab-group")) {
+      try { applySavedState(g); } catch (e) { console.error("[NativeGroupShortcut] 折りたたみ状態の復元に失敗:", e); }
+    }
+    for (const g of pendingSave) {
+      try { if (g.isConnected) saveGroupState(g); } catch (_) {}
+    }
+    pendingSave.clear();
     for (const g of document.querySelectorAll("tab-group")) {
       try { syncGroupCollapse(g); } catch (e) { console.error("[NativeGroupShortcut] 折りたたみ表示の更新に失敗:", e); }
     }
@@ -423,7 +482,14 @@
 
   function watchCollapse() {
     const target = document.getElementById("tabbrowser-tabs") || document.documentElement;
-    new MutationObserver(queueSync).observe(target, {
+    new MutationObserver((records) => {
+      for (const r of records) {
+        if (r.type === "attributes" && r.attributeName === "collapsed" && r.target.localName === "tab-group") {
+          if (seenGroups.has(r.target)) pendingSave.add(r.target);
+        }
+      }
+      queueSync();
+    }).observe(target, {
       subtree: true, childList: true, attributes: true, attributeFilter: ["collapsed", "selected"],
     });
     syncAllGroups();
@@ -576,7 +642,7 @@
     document.addEventListener("click", onGroupLabelClick, true);
     if (DEBUG) {
       const log = (...a) => console.log("[NativeGroupShortcut]", ...a);
-      log("loaded v0.7.0");
+      log("loaded v0.9.0");
       // パネル内のキー入力が、途中で止められていないかを見る（captureとbubbleで defaultPrevented を比べる）
       const inMenu = (e) => e.composedPath().some((n) => n.localName === "tabgroup-menu" || n.id === "tab-group-editor");
       window.addEventListener("keydown", (e) => {
