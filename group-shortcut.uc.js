@@ -412,7 +412,7 @@
   // グループのid（本体のセッション復元で保たれる）をキーに、状態を設定へ記録する。
   // 起動後にグループが現れたら、記録された状態に合わせる。
   const COLLAPSE_STATE_PREF = PREF + "collapsed-state";
-  const MAX_SAVED = 300;
+  const MAX_SAVED = 10000;
   const STARTED_AT = Date.now();
   const seenGroups = new WeakSet();
   const pendingSave = new Set();
